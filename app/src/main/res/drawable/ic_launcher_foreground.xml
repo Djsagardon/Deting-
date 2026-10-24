@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Centered stylized glowing Bondly heart in 66dp safe-zone -->
+    <path
+        android:pathData="M54,77.5 C52.2,75.8 33,58.3 33,45 C33,37.3 39.3,31 47,31 C51.4,31 55.6,33.1 58.3,36.3 C61,33.1 65.2,31 69.6,31 C77.3,31 83.6,37.3 83.6,45 C83.6,58.3 64.4,75.8 62.6,77.5 L58.3,81.4 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="33"
+                android:startY="31"
+                android:endX="84"
+                android:endY="81"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF3366" />
+                <item android:offset="0.5" android:color="#E02885" />
+                <item android:offset="1.0" android:color="#8E2DE2" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Sparkling accent -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M70,36 L72,41 L77,43 L72,45 L70,50 L68,45 L63,43 L68,41 Z" />
+</vector>

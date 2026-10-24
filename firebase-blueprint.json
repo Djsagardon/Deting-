@@ -1,0 +1,197 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Represents a dating profile for an adult registered user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Internal Firebase Auth UID." },
+        "publicUserId": { "type": "string", "description": "Unique permanent public ID (e.g., BD482731)." },
+        "displayName": { "type": "string", "description": "User's display name." },
+        "age": { "type": "integer", "description": "Calculated age (must be >= 18)." },
+        "bio": { "type": "string", "description": "User's personal bio." },
+        "gender": { "type": "string", "description": "User's gender identity." },
+        "interests": { "type": "array", "description": "List of user interests/tags." },
+        "city": { "type": "string", "description": "City or general location." },
+        "profilePhotoUrls": { "type": "array", "description": "List of hosted photo URLs." },
+        "totalPhotoCount": { "type": "integer", "description": "Total number of profile photos." },
+        "verificationStatus": { "type": "string", "description": "Verification status: verified, unverified, pending." },
+        "accountStatus": { "type": "string", "description": "Account status: active, suspended, deleted." },
+        "allowCallsFrom": { "type": "string", "description": "Call permission setting: matches, everyone, none." },
+        "showOnlineStatus": { "type": "boolean", "description": "Privacy preference for online status." },
+        "isPremium": { "type": "boolean", "description": "True if user has active premium subscription." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp of creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp of update." },
+        "lastActiveAt": { "type": "string", "format": "date-time", "description": "Server timestamp of last activity." }
+      },
+      "required": ["userId", "publicUserId", "displayName", "age", "accountStatus", "createdAt"]
+    },
+    "PublicUserIndex": {
+      "title": "PublicUserIndex",
+      "description": "Mapping from publicUserId to userId for collision detection and rapid search.",
+      "type": "object",
+      "properties": {
+        "publicUserId": { "type": "string", "description": "The unique public user ID." },
+        "userId": { "type": "string", "description": "The corresponding Firebase Auth UID." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp." }
+      },
+      "required": ["publicUserId", "userId", "createdAt"]
+    },
+    "Like": {
+      "title": "Like",
+      "description": "Represents an interaction (like, super_like, pass) from one user toward another.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique like interaction ID." },
+        "fromUserId": { "type": "string", "description": "UID of user performing action." },
+        "toUserId": { "type": "string", "description": "UID of target user." },
+        "type": { "type": "string", "description": "Action type: like, super_like, or pass." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp." }
+      },
+      "required": ["id", "fromUserId", "toUserId", "type", "createdAt"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "Represents a mutual match between two users.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Match ID, typically lowerUid_higherUid." },
+        "user1Id": { "type": "string", "description": "First user UID." },
+        "user2Id": { "type": "string", "description": "Second user UID." },
+        "users": { "type": "array", "description": "Array of both participant UIDs." },
+        "lastMessage": { "type": "string", "description": "Snippet of last message." },
+        "lastMessageTimestamp": { "type": "string", "format": "date-time", "description": "Timestamp of last message." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Match creation timestamp." }
+      },
+      "required": ["id", "user1Id", "user2Id", "users", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A real-time chat message within a match conversation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique message ID." },
+        "matchId": { "type": "string", "description": "Parent match conversation ID." },
+        "senderId": { "type": "string", "description": "Sender user UID." },
+        "text": { "type": "string", "description": "Text message content." },
+        "imageUrl": { "type": "string", "description": "Optional ImgBB hosted photo URL." },
+        "status": { "type": "string", "description": "Message status: sent, delivered, read." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Message timestamp." }
+      },
+      "required": ["id", "matchId", "senderId", "text", "status", "createdAt"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "Signaling metadata for a real audio or video call.",
+      "type": "object",
+      "properties": {
+        "callId": { "type": "string", "description": "Unique call session ID." },
+        "callerUid": { "type": "string", "description": "Caller user UID." },
+        "receiverUid": { "type": "string", "description": "Receiver user UID." },
+        "callerName": { "type": "string", "description": "Caller display name." },
+        "receiverName": { "type": "string", "description": "Receiver display name." },
+        "channelName": { "type": "string", "description": "Agora RTC channel name." },
+        "callType": { "type": "string", "description": "Call modality: audio or video." },
+        "status": { "type": "string", "description": "Call status: ringing, accepted, declined, busy, ended, failed." },
+        "durationSeconds": { "type": "integer", "description": "Call duration in seconds." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Call initiation timestamp." },
+        "endedAt": { "type": "string", "format": "date-time", "description": "Call end timestamp." }
+      },
+      "required": ["callId", "callerUid", "receiverUid", "channelName", "callType", "status", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "User moderation report for safety and compliance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Report ID." },
+        "reporterUid": { "type": "string", "description": "Reporting user UID." },
+        "reportedUid": { "type": "string", "description": "Reported user UID." },
+        "reason": { "type": "string", "description": "Report category/reason." },
+        "details": { "type": "string", "description": "Additional user report details." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Report timestamp." }
+      },
+      "required": ["id", "reporterUid", "reportedUid", "reason", "createdAt"]
+    },
+    "Block": {
+      "title": "Block",
+      "description": "User block record to prevent communication.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Block record ID." },
+        "blockerUid": { "type": "string", "description": "UID of user who blocked." },
+        "blockedUid": { "type": "string", "description": "UID of blocked user." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Block timestamp." }
+      },
+      "required": ["id", "blockerUid", "blockedUid", "createdAt"]
+    },
+    "PrivateAccount": {
+      "title": "PrivateAccount",
+      "description": "Private owner-only account security and raw phone verification data.",
+      "type": "object",
+      "properties": {
+        "mobileNumber": { "type": "string", "description": "Raw unmasked phone number." },
+        "verified": { "type": "boolean", "description": "True if phone number was verified." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp." }
+      },
+      "required": ["mobileNumber", "verified", "updatedAt"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "Real-time user notification for match, chat, or safety events.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique notification ID." },
+        "title": { "type": "string", "description": "Notification title." },
+        "message": { "type": "string", "description": "Notification message body." },
+        "type": { "type": "string", "description": "match, message, or call." },
+        "relatedId": { "type": "string", "description": "Related entity ID." },
+        "read": { "type": "boolean", "description": "Read status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Notification timestamp." }
+      },
+      "required": ["id", "title", "message", "type", "read", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User dating profiles with public discovery data."
+    },
+    "/users/{userId}/private/{documentId}": {
+      "schema": "PrivateAccount",
+      "description": "Private owner-only user account information including raw mobile number."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": "NotificationItem",
+      "description": "Private user notifications for matches and calls."
+    },
+    "/public_user_indices/{publicUserId}": {
+      "schema": "PublicUserIndex",
+      "description": "Index mapping unique public user IDs to user UIDs."
+    },
+    "/likes/{likeId}": {
+      "schema": "Like",
+      "description": "User like and pass interactions."
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Mutual match records between paired users."
+    },
+    "/matches/{matchId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Individual messages in a match conversation."
+    },
+    "/calls/{callId}": {
+      "schema": "Call",
+      "description": "Active and historical call signaling sessions."
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Safety moderation reports."
+    },
+    "/blocks/{blockId}": {
+      "schema": "Block",
+      "description": "User block relationships."
+    }
+  }
+}

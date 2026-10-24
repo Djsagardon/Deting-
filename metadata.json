@@ -1,0 +1,6 @@
+{
+  "name": "Bondly",
+  "description": "Bondly is a real India-wide dating app with verified singles, mandatory 5 profile photos, strict opposite-gender discovery, real-time chat with contact protection, and 1-on-1 audio/video calls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
