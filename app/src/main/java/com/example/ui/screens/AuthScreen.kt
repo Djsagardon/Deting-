@@ -251,10 +251,12 @@ fun AuthScreen(
                             errorMessage = null
 
                             val clientId = try {
-                                val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-                                if (resId != 0) context.getString(resId) else "240976601301-sugab1ov85am77c1hdjlg0k1av2pr88g.apps.googleusercontent.com"
-                            } catch (_: Exception) {
-                                "240976601301-sugab1ov85am77c1hdjlg0k1av2pr88g.apps.googleusercontent.com"
+                                context.getString(com.example.R.string.default_web_client_id)
+                            } catch (e: Exception) {
+                                Log.e("BondlyAuth", "Failed to resolve default_web_client_id: ${e.message}")
+                                errorMessage = "Google Sign-In configuration missing: default_web_client_id not found"
+                                isLoading = false
+                                return@clickable
                             }
 
                             Log.d("BondlyAuth", "Initiating Google Sign-In with serverClientId=$clientId")

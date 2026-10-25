@@ -1,0 +1,158 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Package APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Grant Execute Permission to Gradle Wrapper
+        run: chmod +x gradlew
+
+      - name: Prepare Build Environment & Secrets
+        env:
+          GOOGLE_SERVICES_JSON_SECRET: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          CUSTOM_ENV_SECRET: ${{ secrets.ENV_FILE }}
+        run: |
+          echo "=== Setting up Build Environment ==="
+
+          # 1. Setup .env file for Secrets Gradle Plugin
+          if [ -n "$CUSTOM_ENV_SECRET" ]; then
+            echo "$CUSTOM_ENV_SECRET" > .env
+            echo "✓ Injected .env from GitHub Secrets"
+          elif [ ! -f .env ]; then
+            if [ -f .env.example ]; then
+              cp .env.example .env
+              echo "✓ Initialized .env from .env.example template"
+            else
+              touch .env
+              echo "✓ Created empty .env file"
+            fi
+          else
+            echo "✓ Using existing .env in repository"
+          fi
+
+          # 2. Setup Firebase google-services.json
+          if [ -n "$GOOGLE_SERVICES_JSON_SECRET" ]; then
+            mkdir -p app
+            echo "$GOOGLE_SERVICES_JSON_SECRET" > app/google-services.json
+            echo "✓ Injected app/google-services.json from GitHub Secrets"
+          elif [ -f app/google-services.json ]; then
+            echo "✓ Found existing app/google-services.json in repository"
+          else
+            echo "::warning ::No google-services.json found in repository or secrets! Build may fail if Google Services plugin is active."
+          fi
+
+          # 3. Setup Debug Keystore for APK Signing
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+            echo "✓ Restored original debug.keystore from debug.keystore.base64"
+          elif [ ! -f debug.keystore ]; then
+            echo "Generating fallback debug keystore..."
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "✓ Generated new debug.keystore"
+          else
+            echo "✓ Found existing debug.keystore"
+          fi
+
+      - name: Validate Gradle Dependencies
+        run: |
+          echo "=== Pre-flight Dependency & Configuration Check ==="
+          ./gradlew tasks --stacktrace
+
+      - name: Assemble Debug APK
+        run: |
+          echo "=== Compiling Android APK ==="
+          ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Verify Generated APK
+        id: verify_apk
+        run: |
+          echo "=== Verifying APK Output ==="
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error ::Target APK was not generated at $APK_PATH"
+            exit 1
+          fi
+
+          APK_SIZE=$(ls -lh "$APK_PATH" | awk '{print $5}')
+          APK_BYTES=$(wc -c < "$APK_PATH")
+          echo "✓ APK file exists: $APK_PATH"
+          echo "✓ Size: $APK_SIZE ($APK_BYTES bytes)"
+
+          # Check if zip/unzip can read APK structure
+          if unzip -tq "$APK_PATH" > /dev/null 2>&1; then
+            echo "✓ APK archive integrity check passed."
+          else
+            echo "::error ::Generated APK file is corrupt or invalid zip format!"
+            exit 1
+          fi
+
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+
+          # Copy to a clearly labeled name for artifact upload
+          mkdir -p build-artifacts
+          cp "$APK_PATH" "build-artifacts/Bondly-debug.apk"
+
+      - name: Upload APK as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bondly-debug-apk
+          path: build-artifacts/Bondly-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Generate GitHub Actions Step Summary
+        if: always()
+        run: |
+          echo "## 📱 Bondly Android APK Build Summary" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.verify_apk.outcome }}" == "success" ]; then
+            echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "- **Artifact Name:** \`Bondly-debug-apk\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **File:** \`Bondly-debug.apk\` (${{ steps.verify_apk.outputs.apk_size }})" >> $GITHUB_STEP_SUMMARY
+            echo "- **Target Android SDK:** 36 (Android 16)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Minimum Android SDK:** 24 (Android 7.0+)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📲 How to Install on your Android Phone:" >> $GITHUB_STEP_SUMMARY
+            echo "1. On your Android phone, open GitHub in your mobile browser or the GitHub mobile app." >> $GITHUB_STEP_SUMMARY
+            echo "2. Navigate to this repository's **Actions** tab." >> $GITHUB_STEP_SUMMARY
+            echo "3. Tap this workflow run (**Build & Package APK**)." >> $GITHUB_STEP_SUMMARY
+            echo "4. Scroll down to the **Artifacts** section at the bottom." >> $GITHUB_STEP_SUMMARY
+            echo "5. Tap **Bondly-debug-apk** to download the archive." >> $GITHUB_STEP_SUMMARY
+            echo "6. Extract/open the ZIP using **Files by Google** (or any file manager) and tap **Bondly-debug.apk** to install!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the compilation logs above in the **Assemble Debug APK** step for the specific error." >> $GITHUB_STEP_SUMMARY
+          fi
