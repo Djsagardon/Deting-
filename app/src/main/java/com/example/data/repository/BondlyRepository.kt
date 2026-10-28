@@ -37,15 +37,33 @@ import java.security.SecureRandom
 import java.util.Locale
 import java.util.UUID
 
+private fun getFirestoreInstance(context: Context): FirebaseFirestore {
+    val dbId = try {
+        val resId = context.applicationContext.resources.getIdentifier(
+            "firestore_database_id", "string", context.applicationContext.packageName
+        )
+        if (resId != 0) context.applicationContext.getString(resId).trim() else ""
+    } catch (_: Exception) {
+        ""
+    }
+    return if (dbId.isNotEmpty() && dbId != "(default)") {
+        try {
+            FirebaseFirestore.getInstance(dbId)
+        } catch (_: Exception) {
+            FirebaseFirestore.getInstance()
+        }
+    } else {
+        FirebaseFirestore.getInstance()
+    }
+}
+
 class BondlyRepository(
     private val db: FirebaseFirestore,
     private val auth: com.google.firebase.auth.FirebaseAuth = Firebase.auth
 ) {
 
     constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        ),
+        getFirestoreInstance(context),
         Firebase.auth
     )
     private val random = SecureRandom()

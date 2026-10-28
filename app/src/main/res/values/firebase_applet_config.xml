@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <resources>
-    <string name="firestore_database_id" translatable="false">ai-studio-android-bondly-384a7f1c-fafb-4abb-a9c2-d83a514e653e</string>
+    <string name="firestore_database_id" translatable="false">(default)</string>
 </resources>
