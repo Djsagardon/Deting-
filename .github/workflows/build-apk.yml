@@ -129,6 +129,14 @@ jobs:
             exit 1
           fi
 
+          # Extract signing certificate SHA-1 and SHA-256
+          SHA1_FINGERPRINT=$(keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | awk '{print $2}')
+          SHA256_FINGERPRINT=$(keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android | grep "SHA256:" | awk '{print $2}')
+          echo "apk_sha1=$SHA1_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "apk_sha256=$SHA256_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "✓ Signing SHA-1: $SHA1_FINGERPRINT"
+          echo "✓ Signing SHA-256: $SHA256_FINGERPRINT"
+
           echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
           echo "apk_size=$APK_SIZE" >> "$GITHUB_OUTPUT"
 
@@ -154,6 +162,10 @@ jobs:
             echo "- **File:** \`Bondly-debug.apk\` (${{ steps.verify_apk.outputs.apk_size }})" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Target Android SDK:** 36 (Android 16)" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Minimum Android SDK:** 24 (Android 7.0+)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 🔑 APK Signing Fingerprints (Add to Firebase Console):" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **SHA-1:** \`${{ steps.verify_apk.outputs.apk_sha1 }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **SHA-256:** \`${{ steps.verify_apk.outputs.apk_sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "### 📲 How to Install on your Android Phone:" >> "$GITHUB_STEP_SUMMARY"
             echo "1. On your Android phone, open GitHub in your mobile browser or the GitHub mobile app." >> "$GITHUB_STEP_SUMMARY"
