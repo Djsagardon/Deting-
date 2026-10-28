@@ -68,7 +68,58 @@ jobs:
           elif [ -f app/google-services.json ]; then
             echo "✓ Found existing app/google-services.json in repository"
           else
-            echo "::warning ::No google-services.json found in repository or secrets! Build may fail if Google Services plugin is active."
+            echo "::warning ::No app/google-services.json found in repository or secrets! Restoring project Firebase configuration..."
+            mkdir -p app
+            cat << 'EOF' > app/google-services.json
+{
+  "project_info": {
+    "project_number": "240976601301",
+    "project_id": "gen-lang-client-0197813357",
+    "storage_bucket": "gen-lang-client-0197813357.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:240976601301:android:46b3624612926cf05ec25c",
+        "android_client_info": {
+          "package_name": "com.aistudio.bondly.qvxrtk"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "240976601301-iqul6oinhcra25gosrbr8q1f2k2mun47.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.bondly.qvxrtk",
+            "certificate_hash": "711ed357233d3e84a46fa405d537751aa9df33d4"
+          }
+        },
+        {
+          "client_id": "240976601301-sugab1ov85am77c1hdjlg0k1av2pr88g.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyASY77xQMOir2Rf-PKOdzYluWGP3xc6pZA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "240976601301-sugab1ov85am77c1hdjlg0k1av2pr88g.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+EOF
+            echo "✓ Restored project app/google-services.json"
           fi
 
           # 3. Setup Debug Keystore for APK Signing
