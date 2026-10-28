@@ -20,6 +20,9 @@ jobs:
     name: Build & Package APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true -Dfile.encoding=UTF-8"
+      GRADLE_OPTS: "-Djava.awt.headless=true"
 
     steps:
       - name: Checkout Code
