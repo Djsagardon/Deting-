@@ -62,11 +62,15 @@ jobs:
           if [ -n "$GOOGLE_SERVICES_JSON_SECRET" ]; then
             mkdir -p app
             echo "$GOOGLE_SERVICES_JSON_SECRET" > app/google-services.json
-            echo "✓ Injected app/google-services.json from GitHub Secrets"
+            echo "✓ Configured app/google-services.json from GitHub Secrets"
           elif [ -f app/google-services.json ]; then
             echo "✓ Found existing app/google-services.json in repository"
+          elif [ -f google-services.json ]; then
+            mkdir -p app
+            cp google-services.json app/google-services.json
+            echo "✓ Found google-services.json in root directory and moved to app/google-services.json"
           else
-            echo "::error ::Missing app/google-services.json! Please commit app/google-services.json to your repository or set the GOOGLE_SERVICES_JSON secret in GitHub Repository Settings."
+            echo "::error ::Missing google-services.json! To fix: in your GitHub repository, upload google-services.json or set the GOOGLE_SERVICES_JSON secret in Settings -> Secrets and variables -> Actions."
             exit 1
           fi
 
