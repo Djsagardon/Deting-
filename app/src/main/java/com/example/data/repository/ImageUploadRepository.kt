@@ -37,23 +37,62 @@ class ImageUploadRepository(private val context: Context) {
     ): ImageUploadResult = withContext(Dispatchers.IO) {
         try {
             onProgress(10)
-            val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
-            if (inputStream == null) {
-                return@withContext ImageUploadResult.Error("Unable to open selected image file")
+            // Verify stream accessibility
+            try {
+                context.contentResolver.openInputStream(uri)?.close()
+                    ?: return@withContext ImageUploadResult.Error("Unable to open selected image file")
+            } catch (e: Exception) {
+                return@withContext ImageUploadResult.Error("Failed to access selected image: ${e.message}")
             }
 
-            // 1. Decode and validate
-            val originalBitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream.close()
-            if (originalBitmap == null) {
-                return@withContext ImageUploadResult.Error("Failed to decode image data")
+            // 1. Decode bounds first to prevent Out-Of-Memory on high-megapixel cameras
+            val boundsOptions = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, boundsOptions)
+            }
+
+            if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) {
+                return@withContext ImageUploadResult.Error("Failed to decode image dimensions")
+            }
+
+            val maxDimension = 1280
+            var inSampleSize = 1
+            val rawWidth = boundsOptions.outWidth
+            val rawHeight = boundsOptions.outHeight
+
+            if (rawHeight > maxDimension || rawWidth > maxDimension) {
+                val halfHeight = rawHeight / 2
+                val halfWidth = rawWidth / 2
+                while ((halfHeight / inSampleSize) >= maxDimension && (halfWidth / inSampleSize) >= maxDimension) {
+                    inSampleSize *= 2
+                }
             }
 
             onProgress(30)
-            // 2. Resize and compress to reasonable dimensions (max 1280px) and quality 85%
-            val maxDimension = 1280
-            val width = originalBitmap.width
-            val height = originalBitmap.height
+            // 2. Decode with inSampleSize to drastically lower memory usage
+            val decodeOptions = BitmapFactory.Options().apply {
+                this.inSampleSize = inSampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+
+            val decodedBitmap = try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, decodeOptions)
+                }
+            } catch (oom: OutOfMemoryError) {
+                System.gc()
+                return@withContext ImageUploadResult.Error("Device memory was low while processing this image. Please select a smaller photo.")
+            }
+
+            if (decodedBitmap == null) {
+                return@withContext ImageUploadResult.Error("Failed to decode image data into bitmap")
+            }
+
+            // 3. Final downscale if still exceeds 1280px
+            val width = decodedBitmap.width
+            val height = decodedBitmap.height
             val scaledBitmap = if (width > maxDimension || height > maxDimension) {
                 val ratio = width.toFloat() / height.toFloat()
                 val targetWidth: Int
@@ -65,9 +104,9 @@ class ImageUploadRepository(private val context: Context) {
                     targetHeight = maxDimension
                     targetWidth = (maxDimension * ratio).toInt()
                 }
-                Bitmap.createScaledBitmap(originalBitmap, targetWidth, targetHeight, true)
+                Bitmap.createScaledBitmap(decodedBitmap, targetWidth, targetHeight, true)
             } else {
-                originalBitmap
+                decodedBitmap
             }
 
             onProgress(50)
