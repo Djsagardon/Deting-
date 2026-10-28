@@ -48,16 +48,14 @@ jobs:
           if [ -n "$CUSTOM_ENV_SECRET" ]; then
             echo "$CUSTOM_ENV_SECRET" > .env
             echo "✓ Injected .env from GitHub Secrets"
-          elif [ ! -f .env ]; then
-            if [ -f .env.example ]; then
-              cp .env.example .env
-              echo "✓ Initialized .env from .env.example template"
-            else
-              touch .env
-              echo "✓ Created empty .env file"
-            fi
-          else
+          elif [ -f .env ]; then
             echo "✓ Using existing .env in repository"
+          elif [ -f .env.example ]; then
+            cp .env.example .env
+            echo "✓ Initialized .env from .env.example"
+          else
+            touch .env
+            echo "✓ Created empty .env file"
           fi
 
           # 2. Setup Firebase google-services.json
@@ -68,73 +66,23 @@ jobs:
           elif [ -f app/google-services.json ]; then
             echo "✓ Found existing app/google-services.json in repository"
           else
-            echo "::warning ::No app/google-services.json found in repository or secrets! Restoring project Firebase configuration..."
-            mkdir -p app
-            cat << 'EOF' > app/google-services.json
-{
-  "project_info": {
-    "project_number": "240976601301",
-    "project_id": "gen-lang-client-0197813357",
-    "storage_bucket": "gen-lang-client-0197813357.firebasestorage.app"
-  },
-  "client": [
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:240976601301:android:46b3624612926cf05ec25c",
-        "android_client_info": {
-          "package_name": "com.aistudio.bondly.qvxrtk"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "240976601301-iqul6oinhcra25gosrbr8q1f2k2mun47.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.aistudio.bondly.qvxrtk",
-            "certificate_hash": "711ed357233d3e84a46fa405d537751aa9df33d4"
-          }
-        },
-        {
-          "client_id": "240976601301-sugab1ov85am77c1hdjlg0k1av2pr88g.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyASY77xQMOir2Rf-PKOdzYluWGP3xc6pZA"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "240976601301-sugab1ov85am77c1hdjlg0k1av2pr88g.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "configuration_version": "1"
-}
-EOF
-            echo "✓ Restored project app/google-services.json"
+            echo "::error ::Missing app/google-services.json! Please commit app/google-services.json to your repository or set the GOOGLE_SERVICES_JSON secret in GitHub Repository Settings."
+            exit 1
           fi
 
           # 3. Setup Debug Keystore for APK Signing
           if [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
-            echo "✓ Restored original debug.keystore from debug.keystore.base64"
-          elif [ ! -f debug.keystore ]; then
+            echo "✓ Restored debug.keystore from debug.keystore.base64"
+          elif [ -f debug.keystore ]; then
+            echo "✓ Found existing debug.keystore in repository"
+          else
             echo "Generating fallback debug keystore..."
             keytool -genkey -v -keystore debug.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
             echo "✓ Generated new debug.keystore"
-          else
-            echo "✓ Found existing debug.keystore"
           fi
 
       - name: Validate Gradle Dependencies
@@ -170,8 +118,8 @@ EOF
             exit 1
           fi
 
-          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "apk_size=$APK_SIZE" >> "$GITHUB_OUTPUT"
 
           # Copy to a clearly labeled name for artifact upload
           mkdir -p build-artifacts
@@ -188,22 +136,22 @@ EOF
       - name: Generate GitHub Actions Step Summary
         if: always()
         run: |
-          echo "## 📱 Bondly Android APK Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📱 Bondly Android APK Build Summary" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.verify_apk.outcome }}" == "success" ]; then
-            echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
-            echo "- **Artifact Name:** \`Bondly-debug-apk\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **File:** \`Bondly-debug.apk\` (${{ steps.verify_apk.outputs.apk_size }})" >> $GITHUB_STEP_SUMMARY
-            echo "- **Target Android SDK:** 36 (Android 16)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Minimum Android SDK:** 24 (Android 7.0+)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 📲 How to Install on your Android Phone:" >> $GITHUB_STEP_SUMMARY
-            echo "1. On your Android phone, open GitHub in your mobile browser or the GitHub mobile app." >> $GITHUB_STEP_SUMMARY
-            echo "2. Navigate to this repository's **Actions** tab." >> $GITHUB_STEP_SUMMARY
-            echo "3. Tap this workflow run (**Build & Package APK**)." >> $GITHUB_STEP_SUMMARY
-            echo "4. Scroll down to the **Artifacts** section at the bottom." >> $GITHUB_STEP_SUMMARY
-            echo "5. Tap **Bondly-debug-apk** to download the archive." >> $GITHUB_STEP_SUMMARY
-            echo "6. Extract/open the ZIP using **Files by Google** (or any file manager) and tap **Bondly-debug.apk** to install!" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ Build Successful!" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Artifact Name:** \`Bondly-debug-apk\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **File:** \`Bondly-debug.apk\` (${{ steps.verify_apk.outputs.apk_size }})" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Target Android SDK:** 36 (Android 16)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Minimum Android SDK:** 24 (Android 7.0+)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 📲 How to Install on your Android Phone:" >> "$GITHUB_STEP_SUMMARY"
+            echo "1. On your Android phone, open GitHub in your mobile browser or the GitHub mobile app." >> "$GITHUB_STEP_SUMMARY"
+            echo "2. Navigate to this repository's **Actions** tab." >> "$GITHUB_STEP_SUMMARY"
+            echo "3. Tap this workflow run (**Build & Package APK**)." >> "$GITHUB_STEP_SUMMARY"
+            echo "4. Scroll down to the **Artifacts** section at the bottom." >> "$GITHUB_STEP_SUMMARY"
+            echo "5. Tap **Bondly-debug-apk** to download the archive." >> "$GITHUB_STEP_SUMMARY"
+            echo "6. Extract/open the ZIP using **Files by Google** (or any file manager) and tap **Bondly-debug.apk** to install!" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
-            echo "Check the compilation logs above in the **Assemble Debug APK** step for the specific error." >> $GITHUB_STEP_SUMMARY
+            echo "### ❌ Build Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Check the compilation logs above in the **Assemble Debug APK** step for the specific error." >> "$GITHUB_STEP_SUMMARY"
           fi
