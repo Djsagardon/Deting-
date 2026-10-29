@@ -85,10 +85,16 @@ class BondlyRepository(
                 handleFirestoreError(error, OperationType.GET, docRef.path)
                 val userFriendlyMessage = when (error.code) {
                     FirebaseFirestoreException.Code.PERMISSION_DENIED ->
-                        "Access to profile denied. Please ensure your account has permission."
+                        "Firestore Security Rules Denied Access (PERMISSION_DENIED).\n\n" +
+                        "The security rules on your Firebase project (${db.app.options.projectId}) are currently denying read access to the 'users' collection.\n\n" +
+                        "Action Required:\n" +
+                        "1. Open Firebase Console -> Build -> Firestore Database -> Rules tab.\n" +
+                        "2. Paste the rules from firestore.rules into the editor.\n" +
+                        "3. Click 'Publish'.\n" +
+                        "4. Tap 'Retry Loading Profile' below."
                     FirebaseFirestoreException.Code.UNAVAILABLE ->
-                        "Bondly services are temporarily unreachable. Check your connection."
-                    else -> error.localizedMessage ?: "Failed to load user profile."
+                        "Connection issue: Unable to reach Cloud Firestore. Please check your internet connection and retry."
+                    else -> error.localizedMessage ?: "Failed to load user profile (${error.code})."
                 }
                 trySend(UserProfileState.Error(userFriendlyMessage, canRetry = true, cause = error))
                 return@addSnapshotListener
@@ -96,15 +102,11 @@ class BondlyRepository(
 
             if (snapshot != null && snapshot.exists()) {
                 val profile = snapshot.toObject(UserProfile::class.java)
-                if (profile != null && profile.displayName.isNotBlank() && profile.profileCompleted) {
+                if (profile != null && profile.displayName.isNotBlank() && profile.profileCompleted && profile.profilePhotoUrls.size >= 5) {
                     Log.d("BondlyAuth", "Complete profile loaded for $userId: ${profile.displayName}")
                     trySend(UserProfileState.Loaded(profile))
-                } else if (profile != null && profile.displayName.isNotBlank()) {
-                    // Profile has some basic data but marked incomplete
-                    Log.d("BondlyAuth", "Profile incomplete for $userId (profileCompleted=${profile.profileCompleted})")
-                    trySend(UserProfileState.Incomplete(profile))
                 } else if (profile != null) {
-                    Log.d("BondlyAuth", "Profile exists but missing fields for $userId")
+                    Log.d("BondlyAuth", "Profile incomplete for $userId (photos=${profile.profilePhotoUrls.size}, completed=${profile.profileCompleted})")
                     trySend(UserProfileState.Incomplete(profile))
                 } else {
                     Log.d("BondlyAuth", "Profile doc exists but failed to deserialize for $userId")
@@ -117,6 +119,48 @@ class BondlyRepository(
         }
         awaitClose { listener.remove() }
     }.flowOn(Dispatchers.IO)
+
+    suspend fun ensureInitialProfile(userId: String): UserProfile = withContext(Dispatchers.IO) {
+        val docRef = db.collection("users").document(userId)
+        val existingSnapshot = try {
+            docRef.get().await()
+        } catch (e: Exception) {
+            Log.w("BondlyRepo", "Could not check existing profile for $userId: ${e.message}")
+            null
+        }
+
+        if (existingSnapshot != null && existingSnapshot.exists()) {
+            val existingProfile = existingSnapshot.toObject(UserProfile::class.java)
+            if (existingProfile != null) {
+                return@withContext existingProfile
+            }
+        }
+
+        val googleUser = auth.currentUser
+        val publicId = allocateUniquePublicId(userId)
+        val initialProfile = UserProfile(
+            userId = userId,
+            publicUserId = publicId,
+            displayName = googleUser?.displayName?.takeIf { it.isNotBlank() } ?: "Bondly Member",
+            bio = "",
+            gender = "Female",
+            city = "",
+            state = "",
+            profileCompleted = false,
+            accountStatus = "active",
+            totalPhotoCount = if (googleUser?.photoUrl != null) 1 else 0,
+            profilePhotoUrls = if (googleUser?.photoUrl != null) listOf(googleUser.photoUrl.toString()) else emptyList(),
+            createdAt = Timestamp.now()
+        )
+
+        try {
+            docRef.set(initialProfile).await()
+            Log.i("BondlyRepo", "Initial profile document created for user $userId")
+        } catch (e: Exception) {
+            Log.w("BondlyRepo", "Could not write initial profile to Firestore: ${e.message}")
+        }
+        initialProfile
+    }
 
     fun observeUserProfile(userId: String): Flow<UserProfile?> {
         val docRef = db.collection("users").document(userId)
@@ -137,7 +181,7 @@ class BondlyRepository(
             val snapshot = docRef.get().await()
             if (snapshot.exists()) {
                 val profile = snapshot.toObject(UserProfile::class.java)
-                if (profile != null && profile.displayName.isNotBlank() && profile.profileCompleted) {
+                if (profile != null && profile.displayName.isNotBlank() && profile.profileCompleted && profile.profilePhotoUrls.size >= 5) {
                     Result.success(UserProfileState.Loaded(profile))
                 } else if (profile != null) {
                     Result.success(UserProfileState.Incomplete(profile))
@@ -145,7 +189,8 @@ class BondlyRepository(
                     Result.success(UserProfileState.NotFound)
                 }
             } else {
-                Result.success(UserProfileState.NotFound)
+                val created = ensureInitialProfile(userId)
+                Result.success(UserProfileState.Incomplete(created))
             }
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.GET, docRef.path)

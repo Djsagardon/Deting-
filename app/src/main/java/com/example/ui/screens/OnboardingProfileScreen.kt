@@ -81,6 +81,8 @@ import com.example.ui.theme.CharcoalDark
 import com.example.ui.theme.TextLightGrey
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -90,22 +92,32 @@ import java.util.Calendar
 fun OnboardingProfileScreen(
     currentUserId: String,
     repository: BondlyRepository,
+    initialProfile: UserProfile? = null,
     onProfileCreated: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val uploadRepo = remember { ImageUploadRepository(context) }
+    val googleUser = remember { Firebase.auth.currentUser }
 
     // Multi-step index: 0 = Basic Info, 1 = Location & Phone, 2 = 5 Photos, 3 = Hobbies, 4 = Bio & Rules
     var currentStep by remember { mutableIntStateOf(0) }
     val totalSteps = 5
 
     // Step 1: Basic Info
-    var fullName by remember { mutableStateOf("") }
+    var fullName by remember {
+        mutableStateOf(
+            initialProfile?.displayName?.takeIf { it.isNotBlank() }
+                ?: googleUser?.displayName?.takeIf { it.isNotBlank() }
+                ?: ""
+        )
+    }
     var birthDay by remember { mutableStateOf("15") }
     var birthMonth by remember { mutableStateOf("06") }
     var birthYear by remember { mutableStateOf("1998") }
-    var gender by remember { mutableStateOf("Female") } // Male or Female
+    var gender by remember {
+        mutableStateOf(initialProfile?.gender?.takeIf { it.isNotBlank() } ?: "Female")
+    }
 
     // Calculate age from DOB
     val calculatedAge = remember(birthDay, birthMonth, birthYear) {
@@ -117,17 +129,26 @@ fun OnboardingProfileScreen(
     }
 
     // Step 2: Location & Mobile
-    var selectedState by remember { mutableStateOf("Maharashtra") }
-    var city by remember { mutableStateOf("Mumbai") }
+    var selectedState by remember {
+        mutableStateOf(initialProfile?.state?.takeIf { it.isNotBlank() } ?: "Maharashtra")
+    }
+    var city by remember {
+        mutableStateOf(initialProfile?.city?.takeIf { it.isNotBlank() } ?: "Mumbai")
+    }
     var showStateDropdown by remember { mutableStateOf(false) }
     var mobileNumber by remember { mutableStateOf("") }
     var isVerifyingMobile by remember { mutableStateOf(false) }
-    var isMobileVerified by remember { mutableStateOf(false) }
+    var isMobileVerified by remember { mutableStateOf(initialProfile?.isMobileVerified ?: false) }
     var otpCode by remember { mutableStateOf("") }
     var showOtpDialog by remember { mutableStateOf(false) }
 
     // Step 3: Exactly 5 Photos
-    var photoUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var photoUrls by remember {
+        mutableStateOf<List<String>>(
+            initialProfile?.profilePhotoUrls?.takeIf { it.isNotEmpty() }
+                ?: (if (googleUser?.photoUrl != null) listOf(googleUser.photoUrl.toString()) else emptyList())
+        )
+    }
     var isUploadingPhoto by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableStateOf(0) }
     var selectedPhotoIndexForPreview by remember { mutableStateOf<Int?>(null) }

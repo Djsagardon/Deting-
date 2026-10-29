@@ -31,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -154,6 +155,11 @@ private fun AuthenticatedAppContent(
     }
     val profileState by userProfileStateFlow.collectAsState(initial = UserProfileState.Loading)
 
+    // Automatically initialize/ensure the user's initial Firestore document
+    LaunchedEffect(currentUserId, retryTrigger) {
+        repository.ensureInitialProfile(currentUserId)
+    }
+
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Main) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var chatTargetUid by remember { mutableStateOf<String?>(null) }
@@ -208,9 +214,11 @@ private fun AuthenticatedAppContent(
         }
 
         is UserProfileState.NotFound, is UserProfileState.Incomplete -> {
+            val initial = (state as? UserProfileState.Incomplete)?.profile
             OnboardingProfileScreen(
                 currentUserId = currentUserId,
                 repository = repository,
+                initialProfile = initial,
                 onProfileCreated = {
                     // Profile written to Firestore; snapshot listener updates to UserProfileState.Loaded
                 }
@@ -243,17 +251,19 @@ private fun AuthenticatedAppContent(
                         )
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "Connection Issue",
+                            text = if (state.message.contains("PERMISSION_DENIED", ignoreCase = true)) "Firestore Rules Setup Needed" else "Connection Issue",
                             color = TextWhite,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
+                            fontSize = 18.sp,
+                            textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = state.message,
                             color = TextLightGrey,
                             fontSize = 13.sp,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Start,
+                            lineHeight = 18.sp
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         if (state.canRetry) {
