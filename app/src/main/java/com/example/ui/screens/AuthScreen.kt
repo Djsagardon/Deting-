@@ -61,7 +61,6 @@ import com.example.ui.theme.TextLightGrey
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
@@ -314,12 +313,8 @@ fun AuthScreen(
                                 .setAutoSelectEnabled(false)
                                 .build()
 
-                            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId)
-                                .build()
-
                             val request = GetCredentialRequest.Builder()
                                 .addCredentialOption(googleIdOption)
-                                .addCredentialOption(signInOption)
                                 .build()
 
                             scope.launch {
