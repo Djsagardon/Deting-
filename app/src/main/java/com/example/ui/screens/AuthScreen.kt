@@ -61,8 +61,10 @@ import com.example.ui.theme.TextLightGrey
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.auth.FirebaseAuthException
@@ -81,6 +83,96 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 private const val DEFAULT_WEB_CLIENT_ID_FALLBACK = "148637707279-ls6kl35m66at95q60ufmdfgb8nf07tds.apps.googleusercontent.com"
+
+private fun extractGoogleIdToken(credential: Any?): String? {
+    if (credential == null) return null
+    return when {
+        credential is GoogleIdTokenCredential -> {
+            credential.idToken
+        }
+        credential is CustomCredential && (
+            credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL ||
+            credential.type == TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL
+        ) -> {
+            try {
+                GoogleIdTokenCredential.createFrom(credential.data).idToken
+            } catch (e: Exception) {
+                Log.w("BondlyAuth", "GoogleIdTokenCredential.createFrom failed: ${e.message}. Trying bundle fallback...")
+                credential.data.getString("com.google.android.libraries.identity.googleid.BUNDLE_KEY_ID_TOKEN")
+                    ?: credential.data.getString("idToken")
+                    ?: credential.data.getString("id_token")
+            }
+        }
+        credential is CustomCredential -> {
+            try {
+                GoogleIdTokenCredential.createFrom(credential.data).idToken
+            } catch (_: Exception) {
+                credential.data.getString("com.google.android.libraries.identity.googleid.BUNDLE_KEY_ID_TOKEN")
+                    ?: credential.data.getString("idToken")
+                    ?: credential.data.getString("id_token")
+            }
+        }
+        else -> null
+    }
+}
+
+private suspend fun requestGoogleIdToken(
+    activity: Activity,
+    clientId: String,
+    credentialManager: CredentialManager
+): String {
+    var lastException: Exception? = null
+
+    // Strategy 1: Explicit Sign-In with Google button option (GetSignInWithGoogleOption)
+    // This is Google's designated API for user-initiated button taps, which displays
+    // all available accounts on the device without requiring prior authorization.
+    try {
+        Log.i("BondlyAuth", "Step 1: Attempting explicit button flow with GetSignInWithGoogleOption...")
+        val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(signInOption)
+            .build()
+        val result = credentialManager.getCredential(activity, request)
+        val token = extractGoogleIdToken(result.credential)
+        if (!token.isNullOrBlank()) {
+            Log.i("BondlyAuth", "Successfully obtained ID token via GetSignInWithGoogleOption.")
+            return token
+        }
+    } catch (e: GetCredentialCancellationException) {
+        // User explicitly dismissed or cancelled account selection
+        throw e
+    } catch (e: Exception) {
+        Log.w("BondlyAuth", "GetSignInWithGoogleOption threw ${e.javaClass.simpleName}: ${e.message}. Attempting GetGoogleIdOption fallback...", e)
+        lastException = e
+    }
+
+    // Strategy 2: Fallback to GetGoogleIdOption (with filterByAuthorizedAccounts = false)
+    try {
+        Log.i("BondlyAuth", "Step 2: Attempting fallback with GetGoogleIdOption (filterByAuthorizedAccounts = false)...")
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(clientId)
+            .setAutoSelectEnabled(false)
+            .build()
+        val fallbackRequest = GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
+
+        val fallbackResult = credentialManager.getCredential(activity, fallbackRequest)
+        val token = extractGoogleIdToken(fallbackResult.credential)
+        if (!token.isNullOrBlank()) {
+            Log.i("BondlyAuth", "Successfully obtained ID token via GetGoogleIdOption fallback.")
+            return token
+        }
+    } catch (e: GetCredentialCancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e("BondlyAuth", "GetGoogleIdOption fallback also failed (${e.javaClass.simpleName}: ${e.message}).", e)
+        throw (lastException ?: e)
+    }
+
+    throw IllegalStateException("Google authentication returned no ID token from any supported flow.")
+}
 
 @Composable
 fun AuthScreen(
@@ -305,65 +397,23 @@ fun AuthScreen(
                             val resolvedClientId = if (resId != 0) context.getString(resId).trim() else ""
                             val clientId = if (resolvedClientId.isNotEmpty()) resolvedClientId else DEFAULT_WEB_CLIENT_ID_FALLBACK
 
-                            Log.i("BondlyAuth", "Step 1: Starting Google Sign-In with serverClientId prefix=${clientId.take(15)}...")
-
-                            val googleIdOption = GetGoogleIdOption.Builder()
-                                .setFilterByAuthorizedAccounts(false)
-                                .setServerClientId(clientId)
-                                .setAutoSelectEnabled(false)
-                                .build()
-
-                            val request = GetCredentialRequest.Builder()
-                                .addCredentialOption(googleIdOption)
-                                .build()
+                            Log.i("BondlyAuth", "Starting Google Sign-In with serverClientId prefix=${clientId.take(15)}...")
 
                             scope.launch {
                                 try {
-                                    Log.i("BondlyAuth", "Step 2: Calling CredentialManager.getCredential...")
-                                    val result = credentialManager.getCredential(activity, request)
-                                    val credential = result.credential
-                                    Log.i("BondlyAuth", "Step 3: Credential received. Class=${credential.javaClass.simpleName}, Type=${(credential as? CustomCredential)?.type}")
+                                    val googleIdToken = requestGoogleIdToken(activity, clientId, credentialManager)
 
-                                    val googleIdToken: String? = when {
-                                        credential is GoogleIdTokenCredential -> {
-                                            credential.idToken
-                                        }
-                                        credential is CustomCredential && (credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL || credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL) -> {
-                                            try {
-                                                GoogleIdTokenCredential.createFrom(credential.data).idToken
-                                            } catch (parseEx: Exception) {
-                                                Log.w("BondlyAuth", "GoogleIdTokenCredential.createFrom failed: ${parseEx.message}. Trying bundle fallback...")
-                                                credential.data.getString("com.google.android.libraries.identity.googleid.BUNDLE_KEY_ID_TOKEN")
-                                                    ?: credential.data.getString("idToken")
-                                                    ?: credential.data.getString("id_token")
-                                            }
-                                        }
-                                        credential is CustomCredential -> {
-                                            credential.data.getString("com.google.android.libraries.identity.googleid.BUNDLE_KEY_ID_TOKEN")
-                                                ?: credential.data.getString("idToken")
-                                                ?: credential.data.getString("id_token")
-                                        }
-                                        else -> null
-                                    }
-
-                                    if (googleIdToken.isNullOrBlank()) {
-                                        Log.e("BondlyAuth", "Step 3 FAILED: Google ID Token is null or blank.")
-                                        errorMessage = "Google authentication did not return an ID token. Verify Google Play Services on your device."
-                                        isLoading = false
-                                        return@launch
-                                    }
-
-                                    Log.i("BondlyAuth", "Step 4: ID Token acquired (length=${googleIdToken.length}). Calling Firebase.auth.signInWithCredential...")
+                                    Log.i("BondlyAuth", "ID Token acquired (length=${googleIdToken.length}). Calling Firebase signInWithCredential...")
                                     val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
                                     val authResult = Firebase.auth.signInWithCredential(authCredential).await()
                                     val firebaseUser = authResult.user
 
                                     if (firebaseUser != null) {
-                                        Log.i("BondlyAuth", "Step 5 SUCCESS: Firebase Authentication completed! UID=${firebaseUser.uid}, Email=${firebaseUser.email}")
+                                        Log.i("BondlyAuth", "SUCCESS: Firebase Authentication completed! UID=${firebaseUser.uid}, Email=${firebaseUser.email}")
                                         isLoading = false
                                         onAuthSuccess(firebaseUser)
                                     } else {
-                                        Log.e("BondlyAuth", "Step 5 FAILED: Firebase signInWithCredential returned null user.")
+                                        Log.e("BondlyAuth", "FAILED: Firebase signInWithCredential returned null user.")
                                         errorMessage = "Firebase login completed but returned an empty user profile. Please try again."
                                         isLoading = false
                                     }
@@ -371,9 +421,9 @@ fun AuthScreen(
                                     Log.i("BondlyAuth", "Google account selection was cancelled or dismissed: ${e.message}")
                                     isLoading = false
                                 } catch (e: NoCredentialException) {
-                                    Log.e("BondlyAuth", "NoCredentialException: No Google account available.", e)
+                                    Log.e("BondlyAuth", "NoCredentialException: No matching Google credential returned.", e)
                                     isLoading = false
-                                    errorMessage = "No Google account found on this phone. Add a Google account in Android Settings -> Accounts."
+                                    errorMessage = "Google Sign-In was unable to retrieve credentials (${e.message ?: "No account selected"}). If your account is in Android Settings, ensure Google Play Services has Account permissions."
                                 } catch (e: GetCredentialProviderConfigurationException) {
                                     Log.e("BondlyAuth", "GetCredentialProviderConfigurationException: OAuth config error.", e)
                                     isLoading = false
