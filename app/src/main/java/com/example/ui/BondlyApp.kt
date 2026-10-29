@@ -125,7 +125,9 @@ fun BondlyApp() {
 
     if (currentUser == null) {
         AuthScreen(
-            onAuthSuccess = { currentUser = Firebase.auth.currentUser }
+            onAuthSuccess = { user ->
+                currentUser = user
+            }
         )
     } else {
         AuthenticatedAppContent(
