@@ -42,16 +42,7 @@
         }
       ]
     },
-    {
-      "collectionGroup": "messages",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "localTimestamp",
-          "order": "ASCENDING"
-        }
-      ]
-    },
+
     {
       "collectionGroup": "calls",
       "queryScope": "COLLECTION",
