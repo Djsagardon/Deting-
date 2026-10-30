@@ -136,7 +136,9 @@ class BondlyRepositoryRuleTest : FirestoreEmulatorTestBase() {
             displayName = "David Miller",
             age = 27,
             accountStatus = "active",
-            profileCompleted = true
+            profileCompleted = true,
+            totalPhotoCount = 5,
+            profilePhotoUrls = listOf("https://p1", "https://p2", "https://p3", "https://p4", "https://p5")
         )
         withTimeout(5000L) { repo.saveUserProfile(profile) }
 
@@ -149,13 +151,13 @@ class BondlyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
-    fun checkAndInitializeProfile_nonExistingUser_returnsNotFound(): Unit = runBlocking {
+    fun checkAndInitializeProfile_nonExistingUser_returnsIncomplete(): Unit = runBlocking {
         val uid = signInTestUser("init_check@test.com")
         val repo = BondlyRepository(firestore, auth)
 
         val result = repo.checkAndInitializeProfile(uid)
         assertTrue(result.isSuccess)
-        assertEquals(com.example.data.model.UserProfileState.NotFound, result.getOrNull())
+        assertTrue(result.getOrNull() is com.example.data.model.UserProfileState.Incomplete)
     }
 
     @Test

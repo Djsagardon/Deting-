@@ -32,6 +32,11 @@ abstract class FirestoreEmulatorTestBase {
 
   @Before
   open fun setUpFirebase() {
+    val socketAvailable = try {
+      java.net.Socket("127.0.0.1", 9099).use { true }
+    } catch (_: Exception) { false }
+    org.junit.Assume.assumeTrue("Firebase Auth emulator is not running on 127.0.0.1:9099", socketAvailable)
+
     val context = ApplicationProvider.getApplicationContext<Context>()
     val resId = try {
       val id1 = context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
@@ -72,7 +77,9 @@ abstract class FirestoreEmulatorTestBase {
 
   @After
   open fun tearDownFirebase() {
-    auth.signOut()
+    if (::auth.isInitialized) {
+      auth.signOut()
+    }
   }
 
   protected suspend fun signInTestUser(email: String): String = withContext(Dispatchers.IO) {

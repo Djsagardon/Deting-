@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -91,21 +92,31 @@ fun IncomingCallDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Pulsing caller avatar
+                // Pulsing caller avatar with profile photo
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
+                        .size(110.dp)
                         .scale(pulseScale)
                         .clip(CircleShape)
+                        .border(3.dp, BondlyPink, CircleShape)
                         .background(BondlyGradient),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = call.callerName.take(1).uppercase(),
-                        color = TextWhite,
-                        fontSize = 42.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    if (call.callerPhotoUrl.isNotBlank()) {
+                        coil.compose.AsyncImage(
+                            model = call.callerPhotoUrl,
+                            contentDescription = call.callerName,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize().clip(CircleShape)
+                        )
+                    } else {
+                        Text(
+                            text = call.callerName.take(1).uppercase(),
+                            color = TextWhite,
+                            fontSize = 44.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(18.dp))

@@ -10,6 +10,7 @@ let testEnv;
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
 const ALICE_UID = "alice_123";
 const BOB_UID = "bob_456";
+const CHARLIE_UID = "charlie_789";
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
 const emulatorPort = parseInt(emulatorPortStr, 10);
@@ -103,7 +104,56 @@ test("Authenticated user: can read other user profile", async () => {
   await assertSucceeds(aliceDb.collection("users").doc(BOB_UID).get());
 });
 
-test("Matches: participants can read match", async () => {
+test("Private subcollection: only owner can read and write", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("private").doc("account").set({
+      mobileNumber: "+919876543210",
+      verified: true,
+      updatedAt: new Date(),
+    })
+  );
+
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("private").doc("account").get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("private").doc("account").set({
+      mobileNumber: "+910000000000",
+    })
+  );
+});
+
+test("Notifications: owner can read; another user can create", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  // Alice can create a notification directed to Bob
+  await assertSucceeds(
+    aliceDb.collection("users").doc(BOB_UID).collection("notifications").doc("notif_1").set({
+      id: "notif_1",
+      userId: BOB_UID,
+      title: "New Match!",
+      message: "You matched with Alice",
+      type: "match",
+      isRead: false,
+      createdAt: new Date(),
+    })
+  );
+
+  // Bob can read his notifications
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  await assertSucceeds(
+    bobDb.collection("users").doc(BOB_UID).collection("notifications").doc("notif_1").get()
+  );
+
+  // Charlie cannot read Bob's notifications
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  await assertFails(
+    charlieDb.collection("users").doc(BOB_UID).collection("notifications").doc("notif_1").get()
+  );
+});
+
+test("Matches and Messages: participants can read and send", async () => {
   const matchId = "alice_123_bob_456";
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await context.firestore().collection("matches").doc(matchId).set({
@@ -118,6 +168,101 @@ test("Matches: participants can read match", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   await assertSucceeds(aliceDb.collection("matches").doc(matchId).get());
 
-  const charlieDb = testEnv.authenticatedContext("charlie_789").firestore();
+  // Alice can send message
+  await assertSucceeds(
+    aliceDb.collection("matches").doc(matchId).collection("messages").doc("msg_1").set({
+      id: "msg_1",
+      matchId: matchId,
+      senderId: ALICE_UID,
+      text: "Hello Bob!",
+      imageUrl: "",
+      status: "sent",
+      createdAt: new Date(),
+    })
+  );
+
+  // Charlie cannot read match or send message
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
   await assertFails(charlieDb.collection("matches").doc(matchId).get());
+  await assertFails(
+    charlieDb.collection("matches").doc(matchId).collection("messages").doc("msg_2").set({
+      id: "msg_2",
+      matchId: matchId,
+      senderId: CHARLIE_UID,
+      text: "Spam",
+      imageUrl: "",
+      status: "sent",
+      createdAt: new Date(),
+    })
+  );
+});
+
+test("Voice/Video Calls: participants can read and update; non-participants denied", async () => {
+  const callId = "call_abc_123";
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  
+  // Alice initiates call to Bob
+  await assertSucceeds(
+    aliceDb.collection("calls").doc(callId).set({
+      callId: callId,
+      callerUid: ALICE_UID,
+      receiverUid: BOB_UID,
+      callerName: "Alice",
+      receiverName: "Bob",
+      channelName: "bondly_call_call_abc",
+      callType: "video",
+      status: "ringing",
+      durationSeconds: 0,
+      createdAt: new Date(),
+    })
+  );
+
+  // Bob can read call and accept
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  await assertSucceeds(bobDb.collection("calls").doc(callId).get());
+  await assertSucceeds(
+    bobDb.collection("calls").doc(callId).update({
+      status: "accepted",
+    })
+  );
+
+  // Charlie cannot read or tamper with call
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  await assertFails(charlieDb.collection("calls").doc(callId).get());
+  await assertFails(
+    charlieDb.collection("calls").doc(callId).update({
+      status: "declined",
+    })
+  );
+});
+
+test("Safety: Blocks and Reports", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  // Alice reports Charlie
+  await assertSucceeds(
+    aliceDb.collection("reports").doc("rep_1").set({
+      id: "rep_1",
+      reporterUid: ALICE_UID,
+      reportedUid: CHARLIE_UID,
+      reason: "Inappropriate behavior",
+      details: "Spam messages",
+      createdAt: new Date(),
+    })
+  );
+
+  // Alice blocks Charlie
+  await assertSucceeds(
+    aliceDb.collection("blocks").doc("alice_123_charlie_789").set({
+      id: "alice_123_charlie_789",
+      blockerUid: ALICE_UID,
+      blockedUid: CHARLIE_UID,
+      createdAt: new Date(),
+    })
+  );
+
+  // Charlie cannot read Alice's report or block record
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  await assertFails(charlieDb.collection("reports").doc("rep_1").get());
+  await assertFails(charlieDb.collection("blocks").doc("alice_123_charlie_789").get());
 });

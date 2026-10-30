@@ -1,7 +1,7 @@
 {
   "firestore": [
     {
-      "database": "ai-studio-android-bondly-384a7f1c-fafb-4abb-a9c2-d83a514e653e",
+      "database": "(default)",
       "rules": "firestore.rules"
     }
   ],

@@ -11,6 +11,7 @@ data class CallSession(
     val callerUid: String = "",
     val receiverUid: String = "",
     val callerName: String = "",
+    val callerPhotoUrl: String = "",
     val receiverName: String = "",
     val channelName: String = "",
     val callType: String = "video", // audio or video

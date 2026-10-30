@@ -2,8 +2,11 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ----------------------------------------------------
+    // AUTHENTICATION & OWNERSHIP HELPERS
+    // ----------------------------------------------------
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.uid != null;
     }
 
     function isOwner(userId) {
@@ -11,83 +14,130 @@ service cloud.firestore {
     }
 
     // ----------------------------------------------------
-    // User Profiles
+    // USER PROFILES & PRIVATE DATA
     // ----------------------------------------------------
     match /users/{userId} {
-      // Authenticated users can read public profiles for Discovery, Matches, and Calling
+      // Authenticated users can read profiles for Discovery, Swiping, and Matches.
+      // (Sensitive info like raw mobile number is stored separately in the private subcollection)
       allow read: if isSignedIn();
 
-      // An authenticated user can only create their own profile document matching their auth UID
-      allow create: if isOwner(userId) && request.resource.data.userId == userId;
+      // Only the authenticated account owner can create their own profile document
+      allow create: if isOwner(userId)
+                    && request.resource.data.userId == userId
+                    && request.resource.data.displayName is string
+                    && request.resource.data.accountStatus is string
+                    && (!('age' in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 18));
 
-      // An authenticated user can only update their own profile document
-      allow update: if isOwner(userId) && request.resource.data.userId == userId;
+      // Only the authenticated account owner can update their own profile document.
+      // A user cannot reassign the document's userId to impersonate another account.
+      // When profileCompleted is set to true, enforce that 5 photos and age >= 18 are present.
+      allow update: if isOwner(userId)
+                    && request.resource.data.userId == userId
+                    && (!('age' in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 18))
+                    && (!request.resource.data.profileCompleted || (request.resource.data.profilePhotoUrls.size() == 5 && request.resource.data.age >= 18));
 
-      // An authenticated user can only delete their own profile
+      // Account deletion (owner only)
       allow delete: if isOwner(userId);
 
-      // Private subcollection: strictly accessible by the account owner
-      // (Used to store verified phone numbers, KYC, private security metadata)
+      // Private user data: strictly accessible by the account owner
+      // Stores raw unmasked mobile numbers, KYC status, and security tokens
       match /private/{documentId} {
         allow read, write: if isOwner(userId);
       }
 
-      // User notifications
+      // Notifications:
+      // The user can read, update (mark read), or delete their own notifications.
+      // Other authenticated users can create notifications directed to this user (for matches or incoming calls).
       match /notifications/{notificationId} {
-        allow read, write: if isOwner(userId);
+        allow read, update, delete: if isOwner(userId);
+        allow create: if isSignedIn() && request.resource.data.userId == userId;
       }
     }
 
-    // Public User Index (BDXXXXXX -> userId) for searching by Public ID
+    // ----------------------------------------------------
+    // PUBLIC USER INDEX (BDXXXXXX -> userId)
+    // ----------------------------------------------------
     match /public_user_indices/{publicUserId} {
+      // Any authenticated user can read index to look up a member by Public ID
       allow read: if isSignedIn();
+      // Only the account owner can claim their public ID
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if false;
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
-    // Likes & Passes
+    // ----------------------------------------------------
+    // LIKES & PASSES
+    // ----------------------------------------------------
     match /likes/{likeId} {
+      // Users can read likes they sent OR likes received by them (needed for mutual match check)
       allow read: if isSignedIn() && (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
+      // Users can only record likes or passes where they are the sender
       allow create: if isSignedIn() && request.resource.data.fromUserId == request.auth.uid;
+      // Only the sender can update or remove their like/pass
       allow update, delete: if isSignedIn() && resource.data.fromUserId == request.auth.uid;
     }
 
-    // Matches
+    // ----------------------------------------------------
+    // MATCHES & REAL-TIME MESSAGING
+    // ----------------------------------------------------
     match /matches/{matchId} {
+      // Only the two matched users can read, create, or update the match record
       allow read: if isSignedIn() && (request.auth.uid in resource.data.users);
       allow create: if isSignedIn() && (request.auth.uid in request.resource.data.users);
       allow update: if isSignedIn() && (request.auth.uid in resource.data.users);
       allow delete: if isSignedIn() && (request.auth.uid in resource.data.users);
 
-      // Realtime Messages Subcollection within match
+      // Messages subcollection within a match
       match /messages/{messageId} {
+        // Only conversation participants can read messages
         allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users);
-        allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
-        allow update: if isSignedIn();
+        // Only conversation participants can send messages, and senderId must match auth UID
+        allow create: if isSignedIn()
+                      && request.resource.data.senderId == request.auth.uid
+                      && (request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users);
+        // Status updates (e.g. read receipts) by conversation participants
+        allow update: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users);
         allow delete: if false;
       }
     }
 
-    // 1-on-1 Audio/Video Call Sessions
+    // ----------------------------------------------------
+    // VOICE & VIDEO CALL SIGNALING
+    // ----------------------------------------------------
     match /calls/{callId} {
+      // Only the caller or receiver can read the call session
       allow read: if isSignedIn() && (resource.data.callerUid == request.auth.uid || resource.data.receiverUid == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.callerUid == request.auth.uid;
+      // The caller initiates the call session with themselves as callerUid
+      allow create: if isSignedIn()
+                    && request.resource.data.callerUid == request.auth.uid
+                    && request.resource.data.receiverUid != request.auth.uid;
+      // Both participants can update status (e.g., accepted, declined, ended)
       allow update: if isSignedIn() && (resource.data.callerUid == request.auth.uid || resource.data.receiverUid == request.auth.uid);
       allow delete: if isSignedIn() && (resource.data.callerUid == request.auth.uid || resource.data.receiverUid == request.auth.uid);
     }
 
-    // User Reports (Safety & Anti-Harassment)
+    // ----------------------------------------------------
+    // SAFETY: REPORTS & BLOCKS
+    // ----------------------------------------------------
     match /reports/{reportId} {
-      allow create: if isSignedIn() && request.resource.data.reporterUid == request.auth.uid;
+      // Any authenticated user can submit a report against a bad actor
+      allow create: if isSignedIn()
+                    && request.resource.data.reporterUid == request.auth.uid
+                    && request.resource.data.reportedUid != request.auth.uid;
+      // Only the reporter can view their own filed report
       allow read: if isSignedIn() && resource.data.reporterUid == request.auth.uid;
       allow update, delete: if false;
     }
 
-    // User Blocks
     match /blocks/{blockId} {
+      // Users can see who they have blocked
       allow read: if isSignedIn() && resource.data.blockerUid == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.blockerUid == request.auth.uid;
+      // Users can block another user
+      allow create: if isSignedIn()
+                    && request.resource.data.blockerUid == request.auth.uid
+                    && request.resource.data.blockedUid != request.auth.uid;
+      // Users can unblock
       allow delete: if isSignedIn() && resource.data.blockerUid == request.auth.uid;
       allow update: if false;
     }

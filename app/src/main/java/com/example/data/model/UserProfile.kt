@@ -28,6 +28,10 @@ data class UserProfile(
     val allowCallsFrom: String = "matches",
     val showOnlineStatus: Boolean = true,
     val isPremium: Boolean = false,
+    val userLevel: Int = 1,
+    val activeDaysCount: Int = 1,
+    val lastActiveDate: String = "",
+    val role: String = "user", // "user" or "admin"
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
     @ServerTimestamp val lastActiveAt: Timestamp? = null

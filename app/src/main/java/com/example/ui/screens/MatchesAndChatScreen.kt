@@ -1,9 +1,5 @@
 package com.example.ui.screens
 
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,7 +25,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,7 +48,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,8 +58,6 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.Match
 import com.example.data.model.UserProfile
 import com.example.data.repository.BondlyRepository
-import com.example.data.repository.ImageUploadRepository
-import com.example.data.repository.ImageUploadResult
 import com.example.util.ContactSharingFilter
 import com.example.ui.components.ChatMessageBubble
 import com.example.ui.components.EmptyState
@@ -365,34 +357,14 @@ private fun ActiveChatView(
     onBack: () -> Unit,
     onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val uploadRepo = remember { ImageUploadRepository(context) }
 
     val messagesFlow = remember(matchId) { repository.observeMessages(matchId) }
     val messages by messagesFlow.collectAsState(initial = emptyList())
 
     var messageInput by remember { mutableStateOf("") }
-    var isUploadingImage by remember { mutableStateOf(false) }
     var showOptionsMenu by remember { mutableStateOf(false) }
     var showReportSheet by remember { mutableStateOf(false) }
-
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            isUploadingImage = true
-            scope.launch {
-                val uploadResult = uploadRepo.uploadImage(uri)
-                isUploadingImage = false
-                val imageUrl = when (uploadResult) {
-                    is ImageUploadResult.Success -> uploadResult.imageUrl
-                    is ImageUploadResult.Error -> uri.toString()
-                }
-                repository.sendMessage(matchId, text = "", imageUrl = imageUrl)
-            }
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -515,21 +487,6 @@ private fun ActiveChatView(
             }
         }
 
-        if (isUploadingImage) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(color = BondlyPink, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Sending photo...", color = TextMuted, fontSize = 12.sp)
-                }
-            }
-        }
-
         // Contact Sharing Prevention Warning Banner
         val contactCheck = remember(messageInput) { ContactSharingFilter.checkText(messageInput) }
         if (contactCheck.isBlocked) {
@@ -540,7 +497,7 @@ private fun ActiveChatView(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
-                    text = "⚠️ ${contactCheck.violation?.reason ?: "Sharing personal contact details is prohibited on Bondly for your safety."}",
+                    text = "⚠️ ${ContactSharingFilter.WARNING_MESSAGE}",
                     color = Color(0xFFFF6B7D),
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -548,7 +505,7 @@ private fun ActiveChatView(
             }
         }
 
-        // Input Bottom Bar
+        // Input Bottom Bar (Text Only, photo attachment removed for safety)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -556,23 +513,6 @@ private fun ActiveChatView(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Photo attach button
-            IconButton(
-                onClick = {
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Image,
-                    contentDescription = "Send Image",
-                    tint = BondlyPink
-                )
-            }
-
-            Spacer(modifier = Modifier.width(6.dp))
-
             OutlinedTextField(
                 value = messageInput,
                 onValueChange = { messageInput = it },
@@ -590,7 +530,7 @@ private fun ActiveChatView(
                 maxLines = 4
             )
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             // Send Button - Disabled if contact information detected
             val canSend = messageInput.isNotBlank() && !contactCheck.isBlocked

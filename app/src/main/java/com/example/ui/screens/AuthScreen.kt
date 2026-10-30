@@ -258,7 +258,7 @@ fun AuthScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "100% Free • Zero Paywalls • Real Verified Users",
+                        text = "Genuine Connections • Verified Profiles • Safe & Secure",
                         color = BondlyPink,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold

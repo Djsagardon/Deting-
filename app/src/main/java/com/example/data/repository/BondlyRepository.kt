@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
@@ -431,6 +433,9 @@ class BondlyRepository(
 
     suspend fun likeUser(targetUserId: String, isSuperLike: Boolean): Result<Boolean> = withContext(Dispatchers.IO) {
         val uid = requireUserId()
+        if (uid == targetUserId) {
+            return@withContext Result.failure(IllegalArgumentException("You cannot express interest in your own profile."))
+        }
         val likeId = "${uid}_${targetUserId}"
         val likeRef = db.collection("likes").document(likeId)
         try {
@@ -444,37 +449,62 @@ class BondlyRepository(
             )
             likeRef.set(likePayload).await()
 
-            // Check if mutual like exists
+            // Check if inverse like already exists
             val inverseLikeId = "${targetUserId}_${uid}"
             val inverseDoc = db.collection("likes").document(inverseLikeId).get().await()
             val isMutual = inverseDoc.exists() && inverseDoc.getString("type") in listOf("like", "super_like")
 
+            val myProfile = getUserProfile(uid)
+            val myName = myProfile?.displayName ?: "Someone"
+            val targetProfile = getUserProfile(targetUserId)
+
             if (isMutual) {
-                // Create unique match record (lower UID first for determinism)
+                // Create ONE unique match record atomically using a transaction
                 val matchId = if (uid < targetUserId) "${uid}_${targetUserId}" else "${targetUserId}_${uid}"
                 val matchRef = db.collection("matches").document(matchId)
-                val matchPayload = mapOf(
-                    "id" to matchId,
-                    "user1Id" to if (uid < targetUserId) uid else targetUserId,
-                    "user2Id" to if (uid < targetUserId) targetUserId else uid,
-                    "users" to listOf(uid, targetUserId),
-                    "lastMessage" to "You matched! Say hello 👋",
-                    "lastMessageTimestamp" to FieldValue.serverTimestamp(),
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-                matchRef.set(matchPayload).await()
 
-                // Create match notifications for both users
+                db.runTransaction { transaction ->
+                    val snapshot = transaction.get(matchRef)
+                    if (!snapshot.exists()) {
+                        val matchPayload = mapOf(
+                            "id" to matchId,
+                            "user1Id" to if (uid < targetUserId) uid else targetUserId,
+                            "user2Id" to if (uid < targetUserId) targetUserId else uid,
+                            "users" to listOf(uid, targetUserId),
+                            "lastMessage" to "You matched! Say hello 👋",
+                            "lastMessageTimestamp" to FieldValue.serverTimestamp(),
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                        transaction.set(matchRef, matchPayload)
+                    }
+                }.await()
+
+                // Create match notifications for BOTH users
                 createNotification(
                     userId = targetUserId,
-                    title = "New Match! 🎉",
-                    message = "You have a new mutual match on Bondly! Start a conversation.",
+                    title = "It's a Match! 🎉",
+                    message = "You and $myName liked each other! Start a conversation.",
+                    type = "match",
+                    targetId = matchId
+                )
+                createNotification(
+                    userId = uid,
+                    title = "It's a Match! 🎉",
+                    message = "You and ${targetProfile?.displayName ?: "someone special"} liked each other! Start a conversation.",
                     type = "match",
                     targetId = matchId
                 )
 
                 Result.success(true)
             } else {
+                // Notify target user that someone expressed interest
+                createNotification(
+                    userId = targetUserId,
+                    title = "New Interest Received 💕",
+                    message = "$myName showed interest in your profile! Check Discover to match.",
+                    type = "like",
+                    targetId = uid
+                )
                 Result.success(false)
             }
         } catch (e: Exception) {
@@ -540,17 +570,17 @@ class BondlyRepository(
             .flowOn(Dispatchers.IO)
     }
 
-    suspend fun sendMessage(matchId: String, text: String, imageUrl: String = ""): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun sendMessage(matchId: String, text: String): Result<Unit> = withContext(Dispatchers.IO) {
         val uid = requireUserId()
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Message cannot be empty."))
+        }
 
-        // Strict contact sharing check before sending
-        if (text.isNotBlank()) {
-            val contactCheck = ContactSharingFilter.checkText(text)
-            if (contactCheck.isBlocked) {
-                val reason = contactCheck.violation?.reason
-                    ?: "Sharing phone numbers, emails, or social media handles is strictly prohibited."
-                return@withContext Result.failure(IllegalArgumentException(reason))
-            }
+        // Strict multi-layer contact sharing & external link filter
+        val contactCheck = ContactSharingFilter.checkText(trimmed)
+        if (contactCheck.isBlocked) {
+            return@withContext Result.failure(IllegalArgumentException(ContactSharingFilter.WARNING_MESSAGE))
         }
 
         val msgId = UUID.randomUUID().toString()
@@ -561,8 +591,8 @@ class BondlyRepository(
                 "id" to msgId,
                 "matchId" to matchId,
                 "senderId" to uid,
-                "text" to text,
-                "imageUrl" to imageUrl,
+                "text" to trimmed,
+                "imageUrl" to "",
                 "status" to "sent",
                 "createdAt" to FieldValue.serverTimestamp()
             )
@@ -570,7 +600,7 @@ class BondlyRepository(
             // Update last message in parent match
             matchRef.update(
                 mapOf(
-                    "lastMessage" to if (text.isNotBlank()) text else "📷 Photo",
+                    "lastMessage" to trimmed,
                     "lastMessageTimestamp" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -589,9 +619,13 @@ class BondlyRepository(
         receiverUid: String,
         receiverName: String,
         callerName: String,
+        callerPhotoUrl: String = "",
         callType: String
     ): Result<CallSession> = withContext(Dispatchers.IO) {
         val uid = requireUserId()
+        if (uid == receiverUid) {
+            return@withContext Result.failure(IllegalArgumentException("Cannot call yourself."))
+        }
         val callId = UUID.randomUUID().toString()
         val channelName = "bondly_call_${callId.take(8)}"
         val callRef = db.collection("calls").document(callId)
@@ -602,6 +636,7 @@ class BondlyRepository(
                 callerUid = uid,
                 receiverUid = receiverUid,
                 callerName = callerName,
+                callerPhotoUrl = callerPhotoUrl,
                 receiverName = receiverName,
                 channelName = channelName,
                 callType = callType,
@@ -612,6 +647,7 @@ class BondlyRepository(
                 "callerUid" to uid,
                 "receiverUid" to receiverUid,
                 "callerName" to callerName,
+                "callerPhotoUrl" to callerPhotoUrl,
                 "receiverName" to receiverName,
                 "channelName" to channelName,
                 "callType" to callType,
@@ -621,10 +657,10 @@ class BondlyRepository(
             )
             callRef.set(payload).await()
 
-            // Also create a call notification for the receiver
+            // Create high-priority call notification for the receiver
             createNotification(
                 userId = receiverUid,
-                title = "Incoming $callType call",
+                title = "Incoming $callType call 📞",
                 message = "$callerName is calling you on Bondly.",
                 type = "call",
                 targetId = callId
@@ -633,6 +669,68 @@ class BondlyRepository(
             Result.success(session)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, callRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun recordDailyActivity(userId: String) = withContext(Dispatchers.IO) {
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val userRef = db.collection("users").document(userId)
+        try {
+            val snapshot = userRef.get().await()
+            if (snapshot.exists()) {
+                val lastActive = snapshot.getString("lastActiveDate") ?: ""
+                val currentActiveDays = snapshot.getLong("activeDaysCount")?.toInt() ?: 1
+                if (lastActive != today) {
+                    val newActiveDays = currentActiveDays + 1
+                    val createdAt = snapshot.getTimestamp("createdAt")
+                    val dummyProfile = UserProfile(
+                        createdAt = createdAt,
+                        activeDaysCount = newActiveDays,
+                        role = snapshot.getString("role") ?: "user"
+                    )
+                    val newLevel = com.example.util.UserLevelManager.calculateProgression(dummyProfile).currentLevel.level
+
+                    userRef.update(
+                        mapOf(
+                            "lastActiveDate" to today,
+                            "activeDaysCount" to newActiveDays,
+                            "userLevel" to newLevel,
+                            "lastActiveAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("BondlyRepo", "Could not record daily activity: ${e.message}")
+        }
+    }
+
+    suspend fun verifyMobileNumber(userId: String, rawMobileNumber: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val uid = requireUserId()
+        val userRef = db.collection("users").document(uid)
+        try {
+            val masked = ContactSharingFilter.maskMobile(rawMobileNumber)
+            userRef.update(
+                mapOf(
+                    "maskedMobileNumber" to masked,
+                    "isMobileVerified" to true,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+
+            val privateRef = userRef.collection("private").document("account")
+            privateRef.set(
+                mapOf(
+                    "mobileNumber" to rawMobileNumber,
+                    "verified" to true,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, userRef.path)
             Result.failure(e)
         }
     }

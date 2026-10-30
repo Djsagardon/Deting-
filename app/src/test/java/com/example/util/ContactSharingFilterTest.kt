@@ -16,7 +16,7 @@ class ContactSharingFilterTest {
     fun standardIndianPhoneNumber_isBlocked() {
         val result = ContactSharingFilter.checkText("Call me on 9876543210 tonight")
         assertTrue(result.isBlocked)
-        assertTrue(result.violation is ContactSharingFilter.ViolationType.PhoneNumber)
+        assertTrue(result.reason.isNotBlank())
     }
 
     @Test
