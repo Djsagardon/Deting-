@@ -13,6 +13,14 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
     // ----------------------------------------------------
     // USER PROFILES & PRIVATE DATA
     // ----------------------------------------------------
@@ -21,35 +29,47 @@ service cloud.firestore {
       // (Sensitive info like raw mobile number is stored separately in the private subcollection)
       allow read: if isSignedIn();
 
-      // Only the authenticated account owner can create their own profile document
+      // Only the authenticated account owner can create their own profile document.
+      // Newly registered users are assigned 'user' role by default (or admin if bootstrapped/created by admin).
       allow create: if isOwner(userId)
                     && request.resource.data.userId == userId
                     && request.resource.data.displayName is string
                     && request.resource.data.accountStatus is string
+                    && (!('role' in request.resource.data) || request.resource.data.role == 'user' || isAdmin())
                     && (!('age' in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 18));
 
-      // Only the authenticated account owner can update their own profile document.
-      // A user cannot reassign the document's userId to impersonate another account.
-      // When profileCompleted is set to true, enforce that 5 photos and age >= 18 are present.
-      allow update: if isOwner(userId)
-                    && request.resource.data.userId == userId
-                    && (!('age' in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 18))
-                    && (!request.resource.data.profileCompleted || (request.resource.data.profilePhotoUrls.size() == 5 && request.resource.data.age >= 18));
+      // Profile updates:
+      // - Account owner can update their profile.
+      // - Users cannot change their own 'role' field (prevents self-promotion to admin).
+      // - Only authorized administrators can alter user roles or account status.
+      // - When profileCompleted is true, enforces 5 photos and age >= 18.
+      allow update: if (
+                      isOwner(userId)
+                      && request.resource.data.userId == userId
+                      && (!('age' in request.resource.data) || (request.resource.data.age is int && request.resource.data.age >= 18))
+                      && (!request.resource.data.profileCompleted || (request.resource.data.profilePhotoUrls.size() == 5 && request.resource.data.age >= 18))
+                      && (
+                        // Normal user cannot change their own role
+                        request.resource.data.role == resource.data.role ||
+                        (!('role' in resource.data) && request.resource.data.role == 'user') ||
+                        isAdmin()
+                      )
+                    ) || isAdmin();
 
-      // Account deletion (owner only)
-      allow delete: if isOwner(userId);
+      // Account deletion: owner or administrator
+      allow delete: if isOwner(userId) || isAdmin();
 
-      // Private user data: strictly accessible by the account owner
+      // Private user data: strictly accessible by the account owner or administrator
       // Stores raw unmasked mobile numbers, KYC status, and security tokens
       match /private/{documentId} {
-        allow read, write: if isOwner(userId);
+        allow read, write: if isOwner(userId) || isAdmin();
       }
 
       // Notifications:
       // The user can read, update (mark read), or delete their own notifications.
-      // Other authenticated users can create notifications directed to this user (for matches or incoming calls).
+      // Other authenticated users can create notifications directed to this user (for likes, matches, or calls).
       match /notifications/{notificationId} {
-        allow read, update, delete: if isOwner(userId);
+        allow read, update, delete: if isOwner(userId) || isAdmin();
         allow create: if isSignedIn() && request.resource.data.userId == userId;
       }
     }
@@ -58,47 +78,85 @@ service cloud.firestore {
     // PUBLIC USER INDEX (BDXXXXXX -> userId)
     // ----------------------------------------------------
     match /public_user_indices/{publicUserId} {
-      // Any authenticated user can read index to look up a member by Public ID
       allow read: if isSignedIn();
-      // Only the account owner can claim their public ID
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if false;
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // ----------------------------------------------------
     // LIKES & PASSES
     // ----------------------------------------------------
     match /likes/{likeId} {
-      // Users can read likes they sent OR likes received by them (needed for mutual match check)
-      allow read: if isSignedIn() && (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
-      // Users can only record likes or passes where they are the sender
+      allow read: if isSignedIn() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid ||
+        isAdmin()
+      );
       allow create: if isSignedIn() && request.resource.data.fromUserId == request.auth.uid;
-      // Only the sender can update or remove their like/pass
-      allow update, delete: if isSignedIn() && resource.data.fromUserId == request.auth.uid;
+      allow update, delete: if isSignedIn() && (resource.data.fromUserId == request.auth.uid || isAdmin());
     }
 
     // ----------------------------------------------------
-    // MATCHES & REAL-TIME MESSAGING
+    // MATCHES & REAL-TIME CONVERSATIONS
     // ----------------------------------------------------
     match /matches/{matchId} {
-      // Only the two matched users can read, create, or update the match record
-      allow read: if isSignedIn() && (request.auth.uid in resource.data.users);
-      allow create: if isSignedIn() && (request.auth.uid in request.resource.data.users);
-      allow update: if isSignedIn() && (request.auth.uid in resource.data.users);
-      allow delete: if isSignedIn() && (request.auth.uid in resource.data.users);
+      function isMatchParticipant() {
+        return isSignedIn() && (
+          (resource.data.users != null && request.auth.uid in resource.data.users) ||
+          (resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+          resource.data.user1Id == request.auth.uid ||
+          resource.data.user2Id == request.auth.uid ||
+          isAdmin()
+        );
+      }
+
+      // Allow get if document does not exist yet (required for transactions/idempotent checks)
+      // or if the caller is a participant in the match
+      allow get: if isSignedIn() && (resource == null || isMatchParticipant());
+
+      // Querying matches: participants can query matches containing their UID
+      allow list: if isMatchParticipant();
+
+      // Creation: Caller must be one of the matched users
+      allow create: if isSignedIn() && (
+        (request.resource.data.users != null && request.auth.uid in request.resource.data.users) ||
+        (request.resource.data.participants != null && request.auth.uid in request.resource.data.participants) ||
+        request.resource.data.user1Id == request.auth.uid ||
+        request.resource.data.user2Id == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Updates (e.g. lastMessage, lastMessageTimestamp) by match participants
+      allow update: if isMatchParticipant();
+      allow delete: if isMatchParticipant();
 
       // Messages subcollection within a match
       match /messages/{messageId} {
+        function canAccessConversation() {
+          return isSignedIn() && (
+            (get(/databases/$(database)/documents/matches/$(matchId)).data.users != null &&
+             request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users) ||
+            (get(/databases/$(database)/documents/matches/$(matchId)).data.participants != null &&
+             request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.participants) ||
+            isAdmin()
+          );
+        }
+
         // Only conversation participants can read messages
-        allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users);
-        // Only conversation participants can send messages, and senderId must match auth UID
-        allow create: if isSignedIn()
-                      && request.resource.data.senderId == request.auth.uid
-                      && (request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users);
-        // Status updates (e.g. read receipts) by conversation participants
-        allow update: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users);
-        allow delete: if false;
+        allow read: if canAccessConversation();
+
+        // Only conversation participants can send messages, with matching senderId
+        allow create: if canAccessConversation()
+                      && request.resource.data.senderId == request.auth.uid;
+
+        // Updates (status e.g. read receipts, delete for me, delete for everyone by sender)
+        allow update: if canAccessConversation()
+                      && request.resource.data.senderId == resource.data.senderId
+                      && request.resource.data.matchId == resource.data.matchId;
+
+        // Physical deletion prevented to protect message audit log; soft-deletion is enforced
+        allow delete: if isAdmin();
       }
     }
 
@@ -106,40 +164,46 @@ service cloud.firestore {
     // VOICE & VIDEO CALL SIGNALING
     // ----------------------------------------------------
     match /calls/{callId} {
-      // Only the caller or receiver can read the call session
-      allow read: if isSignedIn() && (resource.data.callerUid == request.auth.uid || resource.data.receiverUid == request.auth.uid);
-      // The caller initiates the call session with themselves as callerUid
+      allow read: if isSignedIn() && (
+        resource.data.callerUid == request.auth.uid ||
+        resource.data.receiverUid == request.auth.uid ||
+        isAdmin()
+      );
       allow create: if isSignedIn()
                     && request.resource.data.callerUid == request.auth.uid
                     && request.resource.data.receiverUid != request.auth.uid;
-      // Both participants can update status (e.g., accepted, declined, ended)
-      allow update: if isSignedIn() && (resource.data.callerUid == request.auth.uid || resource.data.receiverUid == request.auth.uid);
-      allow delete: if isSignedIn() && (resource.data.callerUid == request.auth.uid || resource.data.receiverUid == request.auth.uid);
+      allow update, delete: if isSignedIn() && (
+        resource.data.callerUid == request.auth.uid ||
+        resource.data.receiverUid == request.auth.uid ||
+        isAdmin()
+      );
     }
 
     // ----------------------------------------------------
     // SAFETY: REPORTS & BLOCKS
     // ----------------------------------------------------
     match /reports/{reportId} {
-      // Any authenticated user can submit a report against a bad actor
       allow create: if isSignedIn()
                     && request.resource.data.reporterUid == request.auth.uid
                     && request.resource.data.reportedUid != request.auth.uid;
-      // Only the reporter can view their own filed report
-      allow read: if isSignedIn() && resource.data.reporterUid == request.auth.uid;
-      allow update, delete: if false;
+      allow read: if isSignedIn() && (resource.data.reporterUid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
     }
 
     match /blocks/{blockId} {
-      // Users can see who they have blocked
-      allow read: if isSignedIn() && resource.data.blockerUid == request.auth.uid;
-      // Users can block another user
+      allow read: if isSignedIn() && (resource.data.blockerUid == request.auth.uid || isAdmin());
       allow create: if isSignedIn()
                     && request.resource.data.blockerUid == request.auth.uid
                     && request.resource.data.blockedUid != request.auth.uid;
-      // Users can unblock
-      allow delete: if isSignedIn() && resource.data.blockerUid == request.auth.uid;
+      allow delete: if isSignedIn() && (resource.data.blockerUid == request.auth.uid || isAdmin());
       allow update: if false;
+    }
+
+    // ----------------------------------------------------
+    // ADMINISTRATIVE AUDIT LOGS
+    // ----------------------------------------------------
+    match /admin_audit_logs/{logId} {
+      allow read, write: if isAdmin();
     }
   }
 }

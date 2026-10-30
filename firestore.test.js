@@ -195,6 +195,50 @@ test("Matches and Messages: participants can read and send", async () => {
       createdAt: new Date(),
     })
   );
+
+  // Message deletion: Sender can soft-delete message for everyone
+  await assertSucceeds(
+    aliceDb.collection("matches").doc(matchId).collection("messages").doc("msg_1").update({
+      deletedForEveryone: true,
+      text: "🚫 This message was deleted",
+    })
+  );
+
+  // Bob can delete message for himself
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  await assertSucceeds(
+    bobDb.collection("matches").doc(matchId).collection("messages").doc("msg_1").update({
+      deletedForUserIds: [BOB_UID],
+    })
+  );
+});
+
+test("Role Management: regular user cannot promote self; admin can update roles", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      role: "user",
+      accountStatus: "active",
+      age: 24,
+    });
+  });
+
+  // Alice cannot promote herself to admin
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      role: "admin",
+    })
+  );
+
+  // Admin context can promote user to admin
+  const adminDb = testEnv.authenticatedContext("admin_user", { admin: true }).firestore();
+  await assertSucceeds(
+    adminDb.collection("users").doc(ALICE_UID).update({
+      role: "admin",
+    })
+  );
 });
 
 test("Voice/Video Calls: participants can read and update; non-participants denied", async () => {

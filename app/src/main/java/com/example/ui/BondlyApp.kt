@@ -701,7 +701,10 @@ private fun AuthenticatedAppContent(
 
                 is Screen.Admin -> {
                     BackHandler { currentScreen = Screen.Settings }
-                    AdminModerationScreen(onBack = { currentScreen = Screen.Settings })
+                    AdminModerationScreen(
+                        repository = repository,
+                        onBack = { currentScreen = Screen.Settings }
+                    )
                 }
 
                 is Screen.Call -> {

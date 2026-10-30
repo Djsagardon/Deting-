@@ -459,25 +459,35 @@ class BondlyRepository(
             val targetProfile = getUserProfile(targetUserId)
 
             if (isMutual) {
-                // Create ONE unique match record atomically using a transaction
-                val matchId = if (uid < targetUserId) "${uid}_${targetUserId}" else "${targetUserId}_${uid}"
+                // Create ONE unique match record atomically with deterministic ID
+                val user1 = if (uid < targetUserId) uid else targetUserId
+                val user2 = if (uid < targetUserId) targetUserId else uid
+                val matchId = "${user1}_${user2}"
                 val matchRef = db.collection("matches").document(matchId)
 
-                db.runTransaction { transaction ->
-                    val snapshot = transaction.get(matchRef)
-                    if (!snapshot.exists()) {
-                        val matchPayload = mapOf(
-                            "id" to matchId,
-                            "user1Id" to if (uid < targetUserId) uid else targetUserId,
-                            "user2Id" to if (uid < targetUserId) targetUserId else uid,
-                            "users" to listOf(uid, targetUserId),
-                            "lastMessage" to "You matched! Say hello 👋",
-                            "lastMessageTimestamp" to FieldValue.serverTimestamp(),
-                            "createdAt" to FieldValue.serverTimestamp()
-                        )
-                        transaction.set(matchRef, matchPayload)
-                    }
-                }.await()
+                val userList = listOf(user1, user2)
+                val targetName = targetProfile?.displayName ?: "Match"
+                val namesMap = mapOf(uid to myName, targetUserId to targetName)
+                val photosMap = mapOf(
+                    uid to (myProfile?.profilePhotoUrls?.firstOrNull() ?: ""),
+                    targetUserId to (targetProfile?.profilePhotoUrls?.firstOrNull() ?: "")
+                )
+
+                val matchPayload = mapOf(
+                    "id" to matchId,
+                    "user1Id" to user1,
+                    "user2Id" to user2,
+                    "users" to userList,
+                    "participants" to userList,
+                    "participantNames" to namesMap,
+                    "participantPhotos" to photosMap,
+                    "lastMessage" to "You matched! Say hello 👋",
+                    "lastMessageTimestamp" to FieldValue.serverTimestamp(),
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+
+                // Idempotent and deterministic match creation with merge
+                matchRef.set(matchPayload, com.google.firebase.firestore.SetOptions.merge()).await()
 
                 // Create match notifications for BOTH users
                 createNotification(
@@ -540,7 +550,14 @@ class BondlyRepository(
 
         return query.snapshots()
             .map { snapshot ->
-                snapshot.toObjects(Match::class.java)
+                snapshot.documents.mapNotNull { doc ->
+                    try {
+                        doc.toObject(Match::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        Log.e("BondlyRepo", "Failed to deserialize match ${doc.id}: ${e.message}")
+                        null
+                    }
+                }.sortedByDescending { it.lastMessageTimestamp?.toDate()?.time ?: it.createdAt?.toDate()?.time ?: 0L }
             }
             .catch { e ->
                 if (e is Exception) handleFirestoreError(e, OperationType.LIST, "matches")
@@ -550,18 +567,26 @@ class BondlyRepository(
     }
 
     // ----------------------------------------------------
-    // REAL-TIME MESSAGING WITH CONTACT PROTECTION
+    // REAL-TIME MESSAGING WITH CONTACT PROTECTION & DELETION
     // ----------------------------------------------------
 
-    fun observeMessages(matchId: String): Flow<List<ChatMessage>> {
+    fun observeMessages(matchId: String, currentUserId: String): Flow<List<ChatMessage>> {
         val query = db.collection("matches")
             .document(matchId)
             .collection("messages")
-            .orderBy("createdAt", Query.Direction.ASCENDING)
+            .orderBy("localTimestamp", Query.Direction.ASCENDING)
 
         return query.snapshots()
             .map { snapshot ->
-                snapshot.toObjects(ChatMessage::class.java)
+                snapshot.documents.mapNotNull { doc ->
+                    try {
+                        doc.toObject(ChatMessage::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+                .filter { !it.isDeletedForUser(currentUserId) }
+                .sortedWith(compareBy({ it.createdAt?.toDate()?.time ?: it.localTimestamp }, { it.localTimestamp }))
             }
             .catch { e ->
                 if (e is Exception) handleFirestoreError(e, OperationType.LIST, "matches/$matchId/messages")
@@ -586,6 +611,7 @@ class BondlyRepository(
         val msgId = UUID.randomUUID().toString()
         val msgRef = db.collection("matches").document(matchId).collection("messages").document(msgId)
         val matchRef = db.collection("matches").document(matchId)
+        val now = System.currentTimeMillis()
         try {
             val payload = mapOf(
                 "id" to msgId,
@@ -594,6 +620,10 @@ class BondlyRepository(
                 "text" to trimmed,
                 "imageUrl" to "",
                 "status" to "sent",
+                "isDeletedForEveryone" to false,
+                "deletedForEveryone" to false,
+                "deletedForUserIds" to emptyList<String>(),
+                "localTimestamp" to now,
                 "createdAt" to FieldValue.serverTimestamp()
             )
             msgRef.set(payload).await()
@@ -601,12 +631,100 @@ class BondlyRepository(
             matchRef.update(
                 mapOf(
                     "lastMessage" to trimmed,
+                    "lastMessageSenderId" to uid,
                     "lastMessageTimestamp" to FieldValue.serverTimestamp()
                 )
             ).await()
             Result.success(Unit)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, msgRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteMessageForEveryone(matchId: String, messageId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val uid = requireUserId()
+        val msgRef = db.collection("matches").document(matchId).collection("messages").document(messageId)
+        try {
+            val snapshot = msgRef.get().await()
+            if (!snapshot.exists()) {
+                return@withContext Result.failure(IllegalStateException("Message does not exist."))
+            }
+            val senderId = snapshot.getString("senderId")
+            if (senderId != uid) {
+                return@withContext Result.failure(SecurityException("Only the sender can delete a message for everyone."))
+            }
+            msgRef.update(
+                mapOf(
+                    "isDeletedForEveryone" to true,
+                    "deletedForEveryone" to true,
+                    "text" to "🚫 This message was deleted",
+                    "deletedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, msgRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteMessageForMe(matchId: String, messageId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val uid = requireUserId()
+        val msgRef = db.collection("matches").document(matchId).collection("messages").document(messageId)
+        try {
+            msgRef.update("deletedForUserIds", FieldValue.arrayUnion(uid)).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, msgRef.path)
+            Result.failure(e)
+        }
+    }
+
+    // ----------------------------------------------------
+    // ROLE MANAGEMENT & ADMINISTRATIVE CONTROLS
+    // ----------------------------------------------------
+
+    suspend fun updateUserRole(targetUserId: String, newRole: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val uid = requireUserId()
+        if (newRole !in listOf("user", "admin")) {
+            return@withContext Result.failure(IllegalArgumentException("Role must be 'user' or 'admin'."))
+        }
+        val targetRef = db.collection("users").document(targetUserId)
+        try {
+            targetRef.update("role", newRole).await()
+            // Record audit log
+            val logId = UUID.randomUUID().toString()
+            db.collection("admin_audit_logs").document(logId).set(
+                mapOf(
+                    "id" to logId,
+                    "adminUid" to uid,
+                    "targetUserId" to targetUserId,
+                    "action" to "SET_ROLE",
+                    "newRole" to newRole,
+                    "timestamp" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, targetRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun searchUserByPublicId(publicId: String): Result<UserProfile?> = withContext(Dispatchers.IO) {
+        val normalized = publicId.trim().uppercase()
+        val indexRef = db.collection("public_user_indices").document(normalized)
+        try {
+            val snapshot = indexRef.get().await()
+            if (!snapshot.exists()) {
+                return@withContext Result.success(null)
+            }
+            val targetUid = snapshot.getString("userId") ?: return@withContext Result.success(null)
+            val profile = getUserProfile(targetUid)
+            Result.success(profile)
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, indexRef.path)
             Result.failure(e)
         }
     }

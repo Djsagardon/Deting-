@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,24 +21,33 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -48,8 +61,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,7 +73,6 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.Match
 import com.example.data.model.UserProfile
 import com.example.data.repository.BondlyRepository
-import com.example.util.ContactSharingFilter
 import com.example.ui.components.ChatMessageBubble
 import com.example.ui.components.EmptyState
 import com.example.ui.components.OnlineIndicator
@@ -71,8 +85,10 @@ import com.example.ui.theme.CharcoalDark
 import com.example.ui.theme.TextLightGrey
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.util.ContactSharingFilter
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
@@ -82,19 +98,23 @@ fun MatchesAndChatScreen(
     selectedTargetUid: String? = null,
     onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit
 ) {
-    val matchesFlow = remember { repository.observeMatches() }
+    val matchesFlow = remember(currentUserId) { repository.observeMatches() }
     val matches by matchesFlow.collectAsState(initial = null)
 
     var activeChatMatchId by remember { mutableStateOf<String?>(null) }
     var activeChatOtherUser by remember { mutableStateOf<UserProfile?>(null) }
 
-    // Resolve active chat if targeted
+    // Resolve active chat if targeted from Discover or Search
     LaunchedEffect(selectedTargetUid, matches) {
         if (!selectedTargetUid.isNullOrBlank()) {
             val otherProfile = repository.getUserProfile(selectedTargetUid)
-            activeChatOtherUser = otherProfile
-            val mId = if (currentUserId < selectedTargetUid) "${currentUserId}_$selectedTargetUid" else "${selectedTargetUid}_$currentUserId"
-            activeChatMatchId = mId
+            activeChatOtherUser = otherProfile ?: UserProfile(
+                userId = selectedTargetUid,
+                displayName = "Match"
+            )
+            val user1 = if (currentUserId < selectedTargetUid) currentUserId else selectedTargetUid
+            val user2 = if (currentUserId < selectedTargetUid) selectedTargetUid else currentUserId
+            activeChatMatchId = "${user1}_${user2}"
         }
     }
 
@@ -135,8 +155,8 @@ private fun ConversationListView(
 
     LaunchedEffect(matches) {
         matches?.forEach { match ->
-            val otherUid = match.users.firstOrNull { it != currentUserId }
-            if (otherUid != null && !userProfilesMap.containsKey(otherUid)) {
+            val otherUid = match.getOtherUserId(currentUserId)
+            if (otherUid.isNotBlank() && !userProfilesMap.containsKey(otherUid)) {
                 scope.launch {
                     val p = repository.getUserProfile(otherUid)
                     if (p != null) {
@@ -171,7 +191,7 @@ private fun ConversationListView(
         } else if (matches.isEmpty()) {
             EmptyState(
                 title = "No Matches Yet",
-                description = "Swipe and like people in Discover to get matched! Once you match, conversations will appear here.",
+                description = "Swipe and like singles in Discover to connect! When both of you like each other, mutual matches appear here.",
                 icon = {
                     Icon(
                         imageVector = Icons.Default.Favorite,
@@ -199,12 +219,20 @@ private fun ConversationListView(
             ) {
                 item { Spacer(modifier = Modifier.width(6.dp)) }
                 items(matches) { match ->
-                    val otherUid = match.users.firstOrNull { it != currentUserId } ?: ""
+                    val otherUid = match.getOtherUserId(currentUserId)
                     val otherProfile = userProfilesMap[otherUid]
+                    val displayName = otherProfile?.displayName ?: match.getOtherUserName(currentUserId)
+                    val photoUrl = otherProfile?.profilePhotoUrls?.firstOrNull() ?: match.getOtherUserPhoto(currentUserId)
+
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clickable {
-                            if (otherProfile != null) onSelectMatch(match, otherProfile)
+                            val targetToOpen = otherProfile ?: UserProfile(
+                                userId = otherUid,
+                                displayName = displayName,
+                                profilePhotoUrls = listOfNotNull(photoUrl.takeIf { it.isNotBlank() })
+                            )
+                            onSelectMatch(match, targetToOpen)
                         }
                     ) {
                         Box(
@@ -215,17 +243,16 @@ private fun ConversationListView(
                                 .background(CharcoalCard),
                             contentAlignment = Alignment.Center
                         ) {
-                            val photo = otherProfile?.profilePhotoUrls?.firstOrNull() ?: ""
-                            if (photo.isNotBlank()) {
+                            if (photoUrl.isNotBlank()) {
                                 AsyncImage(
-                                    model = photo,
-                                    contentDescription = otherProfile?.displayName,
+                                    model = photoUrl,
+                                    contentDescription = displayName,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
                                 Text(
-                                    text = (otherProfile?.displayName ?: "U").take(1).uppercase(),
+                                    text = displayName.take(1).uppercase(),
                                     color = TextWhite,
                                     fontSize = 24.sp,
                                     fontWeight = FontWeight.Bold
@@ -234,7 +261,7 @@ private fun ConversationListView(
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = otherProfile?.displayName ?: "User",
+                            text = displayName,
                             color = TextLightGrey,
                             fontSize = 12.sp,
                             maxLines = 1,
@@ -260,8 +287,10 @@ private fun ConversationListView(
             // Conversation List
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(matches) { match ->
-                    val otherUid = match.users.firstOrNull { it != currentUserId } ?: ""
+                    val otherUid = match.getOtherUserId(currentUserId)
                     val otherProfile = userProfilesMap[otherUid]
+                    val displayName = otherProfile?.displayName ?: match.getOtherUserName(currentUserId)
+                    val photoUrl = otherProfile?.profilePhotoUrls?.firstOrNull() ?: match.getOtherUserPhoto(currentUserId)
 
                     val timeStr = match.lastMessageTimestamp?.toDate()?.let {
                         SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(it)
@@ -271,17 +300,21 @@ private fun ConversationListView(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                if (otherProfile != null) onSelectMatch(match, otherProfile)
+                                val targetToOpen = otherProfile ?: UserProfile(
+                                    userId = otherUid,
+                                    displayName = displayName,
+                                    profilePhotoUrls = listOfNotNull(photoUrl.takeIf { it.isNotBlank() })
+                                )
+                                onSelectMatch(match, targetToOpen)
                             }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(modifier = Modifier.size(54.dp)) {
-                            val photo = otherProfile?.profilePhotoUrls?.firstOrNull() ?: ""
-                            if (photo.isNotBlank()) {
+                            if (photoUrl.isNotBlank()) {
                                 AsyncImage(
-                                    model = photo,
-                                    contentDescription = otherProfile?.displayName,
+                                    model = photoUrl,
+                                    contentDescription = displayName,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
                                         .size(54.dp)
@@ -296,7 +329,7 @@ private fun ConversationListView(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = (otherProfile?.displayName ?: "U").take(1).uppercase(),
+                                        text = displayName.take(1).uppercase(),
                                         color = TextWhite,
                                         fontSize = 22.sp,
                                         fontWeight = FontWeight.Bold
@@ -321,7 +354,7 @@ private fun ConversationListView(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = otherProfile?.displayName ?: "User",
+                                    text = displayName,
                                     color = TextWhite,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp
@@ -334,7 +367,7 @@ private fun ConversationListView(
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = match.lastMessage.ifBlank { "Start a conversation" },
+                                text = match.lastMessage.ifBlank { "You matched! Say hello 👋" },
                                 color = TextLightGrey,
                                 fontSize = 13.sp,
                                 maxLines = 1,
@@ -348,6 +381,7 @@ private fun ConversationListView(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ActiveChatView(
     matchId: String,
@@ -357,14 +391,28 @@ private fun ActiveChatView(
     onBack: () -> Unit,
     onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
-    val messagesFlow = remember(matchId) { repository.observeMessages(matchId) }
+    val messagesFlow = remember(matchId, currentUserId) { repository.observeMessages(matchId, currentUserId) }
     val messages by messagesFlow.collectAsState(initial = emptyList())
 
     var messageInput by remember { mutableStateOf("") }
     var showOptionsMenu by remember { mutableStateOf(false) }
     var showReportSheet by remember { mutableStateOf(false) }
+
+    // Message Deletion State
+    var selectedMessageForAction by remember { mutableStateOf<ChatMessage?>(null) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var pendingDeleteAction by remember { mutableStateOf<String?>(null) } // "everyone" or "me"
+
+    // Auto-scroll to bottom on opening or receiving new messages
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -471,19 +519,87 @@ private fun ActiveChatView(
             }
         }
 
-        // Messages List
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
-            reverseLayout = false
-        ) {
-            items(messages) { message ->
-                ChatMessageBubble(
-                    message = message,
-                    isFromMe = message.senderId == currentUserId
-                )
+        // Messages List with Date Separators
+        if (messages.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = null,
+                        tint = BondlyPink,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "You're connected with ${otherUser.displayName}!",
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Say hello and start getting to know each other.",
+                        color = TextMuted,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            val dayFormat = remember { SimpleDateFormat("yyyyMMdd", Locale.getDefault()) }
+            val labelFormat = remember { SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()) }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            ) {
+                itemsIndexed(messages) { index, message ->
+                    // Calculate date separator
+                    val currentMsgDate = message.createdAt?.toDate() ?: Date(message.localTimestamp)
+                    val prevMsgDate = if (index > 0) {
+                        messages[index - 1].createdAt?.toDate() ?: Date(messages[index - 1].localTimestamp)
+                    } else null
+
+                    val showDateHeader = prevMsgDate == null || dayFormat.format(currentMsgDate) != dayFormat.format(prevMsgDate)
+
+                    if (showDateHeader) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = labelFormat.format(currentMsgDate),
+                                color = TextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(CharcoalCard)
+                                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    ChatMessageBubble(
+                        message = message,
+                        isFromMe = message.senderId == currentUserId,
+                        onLongClick = {
+                            selectedMessageForAction = message
+                        }
+                    )
+                }
             }
         }
 
@@ -558,6 +674,154 @@ private fun ActiveChatView(
                     modifier = Modifier.size(18.dp)
                 )
             }
+        }
+
+        // WhatsApp-Style Contextual Message Action Bottom Sheet
+        if (selectedMessageForAction != null) {
+            val msg = selectedMessageForAction!!
+            val isSender = msg.senderId == currentUserId
+            val sheetState = rememberModalBottomSheetState()
+
+            ModalBottomSheet(
+                onDismissRequest = { selectedMessageForAction = null },
+                sheetState = sheetState,
+                containerColor = CharcoalCard
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                ) {
+                    Text(
+                        text = "Message Options",
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (!msg.isDeleted() && msg.text.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Bondly Message", msg.text))
+                                    Toast.makeText(context, "Message copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    selectedMessageForAction = null
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = TextLightGrey)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("Copy Text", color = TextWhite, fontSize = 15.sp)
+                        }
+                    }
+
+                    if (isSender && !msg.isDeleted()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    pendingDeleteAction = "everyone"
+                                    showDeleteConfirmDialog = true
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = Color(0xFFFF4455))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("Delete for everyone", color = Color(0xFFFF4455), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                pendingDeleteAction = "me"
+                                showDeleteConfirmDialog = true
+                            }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, tint = TextLightGrey)
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text("Delete for me", color = TextWhite, fontSize = 15.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+            }
+        }
+
+        // Delete Confirmation Dialog
+        if (showDeleteConfirmDialog && selectedMessageForAction != null) {
+            val msg = selectedMessageForAction!!
+            val isEveryone = pendingDeleteAction == "everyone"
+
+            AlertDialog(
+                onDismissRequest = {
+                    showDeleteConfirmDialog = false
+                    pendingDeleteAction = null
+                },
+                title = {
+                    Text(
+                        text = if (isEveryone) "Delete for everyone?" else "Delete for you?",
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        text = if (isEveryone) {
+                            "This message will be removed for both you and ${otherUser.displayName}. A deletion marker will be displayed."
+                        } else {
+                            "This message will be removed from your chat history only. Other participants will still be able to view it."
+                        },
+                        color = TextLightGrey,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showDeleteConfirmDialog = false
+                            val action = pendingDeleteAction
+                            pendingDeleteAction = null
+                            selectedMessageForAction = null
+                            scope.launch {
+                                if (action == "everyone") {
+                                    repository.deleteMessageForEveryone(matchId, msg.id)
+                                } else {
+                                    repository.deleteMessageForMe(matchId, msg.id)
+                                }
+                            }
+                        }
+                    ) {
+                        Text(
+                            text = "Delete",
+                            color = Color(0xFFFF4455),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showDeleteConfirmDialog = false
+                            pendingDeleteAction = null
+                        }
+                    ) {
+                        Text("Cancel", color = TextLightGrey)
+                    }
+                },
+                containerColor = CharcoalCard,
+                shape = RoundedCornerShape(20.dp)
+            )
         }
 
         if (showReportSheet) {
