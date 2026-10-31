@@ -1,727 +1,474 @@
 package com.example.ui
 
+import android.Manifest
+import android.content.Context
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.outlined.Chat
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.UserProfile
-import com.example.data.model.UserProfileState
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
+import kotlinx.coroutines.tasks.await
+import coil.compose.AsyncImage
+import com.example.data.model.*
 import com.example.data.repository.BondlyRepository
-import com.example.ui.components.IncomingCallDialog
-import com.example.ui.components.PrimaryButton
-import com.example.ui.components.SecondaryButton
-import com.example.ui.screens.AccountDeletionScreen
-import com.example.ui.screens.AdminModerationScreen
-import com.example.ui.screens.AuthScreen
-import com.example.ui.screens.BlockedUsersScreen
-import com.example.ui.screens.CallHistoryScreen
-import com.example.ui.screens.CallScreen
-import com.example.ui.screens.DiscoverScreen
-import com.example.ui.screens.EditProfileScreen
-import com.example.ui.screens.HelpAndSupportScreen
-import com.example.ui.screens.MatchesAndChatScreen
-import com.example.ui.screens.NotificationsScreen
-import com.example.ui.screens.OnboardingProfileScreen
-import com.example.ui.screens.PhotoManagementScreen
-import com.example.ui.screens.PrivacyAndSafetySettingsScreen
-import com.example.ui.screens.ProfileScreen
-import com.example.ui.screens.PublicProfileScreen
-import com.example.ui.screens.ReportUserScreen
-import com.example.ui.screens.SearchByIdScreen
-import com.example.ui.screens.SettingsScreen
-import com.example.ui.theme.BondlyPink
-import com.example.ui.theme.CharcoalBorder
-import com.example.ui.theme.CharcoalCard
-import com.example.ui.theme.CharcoalDark
-import com.example.ui.theme.TextLightGrey
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextWhite
-import com.example.util.NetworkMonitor
+import com.example.ui.theme.*
+import com.example.util.ContactSharingFilter
 import com.example.util.UserLevelManager
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.launch
 
 sealed class Screen {
-    object Main : Screen()
-    object SearchById : Screen()
-    data class PublicProfile(val userId: String) : Screen()
-    object EditProfile : Screen()
-    object PhotoManagement : Screen()
-    object CallHistory : Screen()
-    object Settings : Screen()
-    object PrivacySafetySettings : Screen()
-    object BlockedUsers : Screen()
-    data class ReportUser(val targetUid: String, val targetName: String) : Screen()
-    object AccountDeletion : Screen()
-    object HelpSupport : Screen()
-    object Admin : Screen()
-    data class Call(
-        val callId: String,
-        val targetUid: String,
-        val targetName: String,
-        val isVideo: Boolean,
-        val isIncoming: Boolean
-    ) : Screen()
+    data object Discover : Screen()
+    data object Search : Screen()
+    data object Matches : Screen()
+    data object Notifications : Screen()
+    data object Profile : Screen()
+    data object Settings : Screen()
+    data object EditProfile : Screen()
+    data object Onboarding : Screen()
+    data object HelpSupport : Screen()
+    data object Admin : Screen()
+    data object AccountDeletion : Screen()
+    data class Chat(val matchId: String, val partnerName: String, val partnerPhoto: String, val partnerUid: String) : Screen()
+    data class Call(val callId: String, val targetUid: String, val targetName: String, val isVideo: Boolean, val isIncoming: Boolean) : Screen()
+    data class PublicProfile(val profile: UserProfile) : Screen()
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BondlyApp() {
+fun BondlyApp(repository: BondlyRepository = remember { BondlyRepository() }) {
+    val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val repository = remember { BondlyRepository(context) }
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
 
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            currentUser = auth.currentUser
-        }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose {
-            Firebase.auth.removeAuthStateListener(listener)
+    val currentUser by repository.observeAuthState().collectAsState(initial = repository.currentUser)
+    val currentProfile by repository.observeProfile(currentUser?.uid ?: "").collectAsState(initial = null)
+    val incomingCall by repository.observeIncomingCalls().collectAsState(initial = null)
+
+    var currentScreen by remember { mutableStateOf<Screen>(Screen.Discover) }
+    val screenStack = remember { mutableStateListOf<Screen>() }
+
+    fun navigateTo(screen: Screen) {
+        screenStack.add(currentScreen)
+        currentScreen = screen
+    }
+
+    fun navigateBack() {
+        if (screenStack.isNotEmpty()) {
+            currentScreen = screenStack.removeAt(screenStack.lastIndex)
+        } else {
+            currentScreen = Screen.Discover
         }
     }
 
+    BackHandler(enabled = currentScreen != Screen.Discover) {
+        navigateBack()
+    }
+
+    // Permission launcher for calls
+    var pendingCallParams by remember { mutableStateOf<Pair<UserProfile, Boolean>?>(null) }
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val recordAudioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
+        val cameraGranted = permissions[Manifest.permission.CAMERA] == true
+        val pending = pendingCallParams
+        if (recordAudioGranted && pending != null) {
+            coroutineScope.launch {
+                val result = repository.initiateCall(pending.first.userId, pending.second)
+                result.onSuccess { session ->
+                    navigateTo(Screen.Call(session.callId, pending.first.userId, pending.first.displayName, pending.second, false))
+                }.onFailure {
+                    Toast.makeText(context, "Could not start call: ${it.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } else {
+            Toast.makeText(context, "Microphone permission is required for calling", Toast.LENGTH_SHORT).show()
+        }
+        pendingCallParams = null
+    }
+
+    fun requestCall(target: UserProfile, isVideo: Boolean) {
+        val myLevel = currentProfile?.userLevel ?: 1
+        if (myLevel < 2) {
+            Toast.makeText(context, "Calling unlocks at Level 2. Keep active on Bondly to unlock!", Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingCallParams = target to isVideo
+        val perms = if (isVideo) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        else arrayOf(Manifest.permission.RECORD_AUDIO)
+        callPermissionLauncher.launch(perms)
+    }
+
+    // Incoming call dialog
+    if (incomingCall != null && currentScreen !is Screen.Call) {
+        AlertDialog(
+            onDismissRequest = { /* Require user response */ },
+            title = { Text("Incoming ${if (incomingCall?.callType == "video") "Video" else "Voice"} Call") },
+            text = { Text("${incomingCall?.callerName} is calling you on Bondly...") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val call = incomingCall ?: return@Button
+                        coroutineScope.launch {
+                            repository.updateCallStatus(call.callId, "active")
+                            navigateTo(Screen.Call(call.callId, call.callerUid, call.callerName, call.callType == "video", true))
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = OnlineGreen)
+                ) {
+                    Text("Answer")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        val call = incomingCall ?: return@OutlinedButton
+                        coroutineScope.launch {
+                            repository.updateCallStatus(call.callId, "rejected")
+                        }
+                    }
+                ) {
+                    Text("Decline")
+                }
+            }
+        )
+    }
+
+    // Unauthenticated State
     if (currentUser == null) {
         AuthScreen(
-            onAuthSuccess = { user ->
-                currentUser = user
-            }
-        )
-    } else {
-        AuthenticatedAppContent(
-            currentUserId = currentUser!!.uid,
-            repository = repository,
-            onSignOut = {
-                Firebase.auth.signOut()
-                currentUser = null
-            }
-        )
-    }
-}
-
-@Composable
-private fun AuthenticatedAppContent(
-    currentUserId: String,
-    repository: BondlyRepository,
-    onSignOut: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // 1. Online-Only Network Monitoring
-    val networkMonitor = remember { NetworkMonitor(context) }
-    var offlineRetryTrigger by remember { mutableIntStateOf(0) }
-    val isOnlineFlow = remember(offlineRetryTrigger) { networkMonitor.isOnline }
-    val isOnline by isOnlineFlow.collectAsState(initial = networkMonitor.isCurrentlyOnline())
-
-    // 2. User Profile state
-    var retryTrigger by remember { mutableIntStateOf(0) }
-    val userProfileStateFlow = remember(currentUserId, retryTrigger) {
-        repository.observeUserProfileState(currentUserId)
-    }
-    val profileState by userProfileStateFlow.collectAsState(initial = UserProfileState.Loading)
-
-    // Automatically initialize/ensure the user's initial Firestore document
-    LaunchedEffect(currentUserId, retryTrigger) {
-        repository.ensureInitialProfile(currentUserId)
-    }
-
-    // Record daily activity once per day for user level progression
-    LaunchedEffect(currentUserId) {
-        repository.recordDailyActivity(currentUserId)
-    }
-
-    var currentScreen by remember { mutableStateOf<Screen>(Screen.Main) }
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var chatTargetUid by remember { mutableStateOf<String?>(null) }
-    var callLockMessage by remember { mutableStateOf<String?>(null) }
-
-    // Real-time Incoming Call Observation
-    val incomingCallFlow = remember(currentUserId) { repository.observeIncomingCalls() }
-    val incomingCall by incomingCallFlow.collectAsState(initial = null)
-
-    // Handle Incoming Call acceptance or decline
-    if (incomingCall != null && currentScreen !is Screen.Call) {
-        IncomingCallDialog(
-            call = incomingCall!!,
-            onAccept = {
-                val call = incomingCall!!
-                scope.launch {
-                    repository.updateCallStatus(call.callId, "accepted")
-                    currentScreen = Screen.Call(
-                        callId = call.callId,
-                        targetUid = call.callerUid,
-                        targetName = call.callerName,
-                        isVideo = call.callType == "video",
-                        isIncoming = true
-                    )
-                }
-            },
-            onDecline = {
-                val call = incomingCall!!
-                scope.launch {
-                    repository.updateCallStatus(call.callId, "declined")
-                }
-            }
-        )
-    }
-
-    // Call Lock Dialog for progression requirements
-    if (callLockMessage != null) {
-        AlertDialog(
-            onDismissRequest = { callLockMessage = null },
-            title = {
-                Text(
-                    text = "Feature Level Locked",
-                    color = TextWhite,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Text(
-                    text = callLockMessage ?: "",
-                    color = TextLightGrey,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { callLockMessage = null }) {
-                    Text("Understood", color = BondlyPink, fontWeight = FontWeight.Bold)
-                }
-            },
-            containerColor = CharcoalCard,
-            shape = RoundedCornerShape(20.dp)
-        )
-    }
-
-    // Show full-screen offline overlay if internet connection is lost
-    if (!isOnline) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(CharcoalDark)
-                .padding(24.dp)
-                .testTag("offline_screen"),
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = CharcoalCard),
-                shape = RoundedCornerShape(24.dp),
-                border = BorderStroke(1.dp, CharcoalBorder)
-            ) {
-                Column(
-                    modifier = Modifier.padding(28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clip(CircleShape)
-                            .background(Color(0x22FF4455)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CloudOff,
-                            contentDescription = "Offline",
-                            tint = Color(0xFFFF4455),
-                            modifier = Modifier.size(36.dp)
-                        )
+            onGoogleSignIn = {
+                coroutineScope.launch {
+                    signInWithGoogle(context, repository) { err ->
+                        Toast.makeText(context, err ?: "Signed in successfully!", Toast.LENGTH_SHORT).show()
                     }
-                    Spacer(modifier = Modifier.height(18.dp))
-                    Text(
-                        text = "You are offline",
-                        color = TextWhite,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Bondly is an online-only social dating platform. An active internet connection is required to discover members, chat, and connect.\n\nPlease check your Wi-Fi or mobile data.",
-                        color = TextLightGrey,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
-                        lineHeight = 20.sp
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    PrimaryButton(
-                        text = "Retry Connection",
-                        onClick = {
-                            offlineRetryTrigger++
-                        }
-                    )
                 }
             }
-        }
+        )
         return
     }
 
-    // Handle User Profile Lifecycle States
-    when (val state = profileState) {
-        is UserProfileState.Loading -> {
-            Box(
-                modifier = Modifier.fillMaxSize().background(CharcoalDark),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = BondlyPink)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Loading your Bondly profile...",
-                        color = TextLightGrey,
-                        fontSize = 14.sp
+    // Onboarding / Profile completion check
+    if (currentProfile != null && !currentProfile!!.profileCompleted && currentScreen !is Screen.Onboarding) {
+        OnboardingScreen(
+            initialProfile = currentProfile!!,
+            onSave = { updated ->
+                coroutineScope.launch {
+                    val publicId = if (updated.publicUserId.isEmpty()) repository.allocateUniquePublicId(currentUser!!.uid) else updated.publicUserId
+                    val toSave = updated.copy(
+                        publicUserId = publicId,
+                        profileCompleted = true,
+                        rulesAccepted = true
                     )
+                    repository.saveProfile(toSave)
+                    currentScreen = Screen.Discover
                 }
             }
-        }
+        )
+        return
+    }
 
-        is UserProfileState.NotFound, is UserProfileState.Incomplete -> {
-            val initial = (state as? UserProfileState.Incomplete)?.profile
-            OnboardingProfileScreen(
-                currentUserId = currentUserId,
-                repository = repository,
-                initialProfile = initial,
-                onProfileCreated = {
-                    // Profile written to Firestore; snapshot listener updates to UserProfileState.Loaded
-                }
-            )
-        }
-
-        is UserProfileState.Error -> {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(CharcoalDark)
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CharcoalCard),
-                    shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, CharcoalBorder)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ErrorOutline,
-                            contentDescription = "Error",
-                            tint = Color(0xFFFF4455),
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
+    Scaffold(
+        topBar = {
+            if (currentScreen in listOf(Screen.Discover, Screen.Search, Screen.Matches, Screen.Notifications, Screen.Profile)) {
+                CenterAlignedTopAppBar(
+                    title = {
                         Text(
-                            text = if (state.message.contains("PERMISSION_DENIED", ignoreCase = true)) "Firestore Rules Setup Needed" else "Connection Issue",
-                            color = TextWhite,
+                            text = when (currentScreen) {
+                                Screen.Discover -> "Bondly"
+                                Screen.Search -> "Search Bondly ID"
+                                Screen.Matches -> "Matches & Chats"
+                                Screen.Notifications -> "Notifications"
+                                Screen.Profile -> "My Profile"
+                                else -> "Bondly"
+                            },
                             fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            textAlign = TextAlign.Center
+                            color = PinkPrimary
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = state.message,
-                            color = TextLightGrey,
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Start,
-                            lineHeight = 18.sp
-                        )
-                        Spacer(modifier = Modifier.height(20.dp))
-                        if (state.canRetry) {
-                            PrimaryButton(
-                                text = "Retry Loading Profile",
-                                onClick = { retryTrigger++ }
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
+                    },
+                    actions = {
+                        if (currentScreen == Screen.Profile) {
+                            IconButton(
+                                onClick = { navigateTo(Screen.Settings) },
+                                modifier = Modifier.testTag("settings_button")
+                            ) {
+                                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurface)
+                            }
                         }
-                        SecondaryButton(
-                            text = "Sign Out & Switch Account",
-                            onClick = onSignOut
-                        )
-                    }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+            }
+        },
+        bottomBar = {
+            if (currentScreen in listOf(Screen.Discover, Screen.Search, Screen.Matches, Screen.Notifications, Screen.Profile)) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 8.dp
+                ) {
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.Discover,
+                        onClick = { currentScreen = Screen.Discover },
+                        icon = { Icon(if (currentScreen == Screen.Discover) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = "Discover") },
+                        label = { Text("Discover") },
+                        modifier = Modifier.testTag("nav_discover")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.Search,
+                        onClick = { currentScreen = Screen.Search },
+                        icon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                        label = { Text("Search") },
+                        modifier = Modifier.testTag("nav_search")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.Matches,
+                        onClick = { currentScreen = Screen.Matches },
+                        icon = { Icon(if (currentScreen == Screen.Matches) Icons.Filled.ChatBubble else Icons.Outlined.ChatBubbleOutline, contentDescription = "Matches") },
+                        label = { Text("Matches") },
+                        modifier = Modifier.testTag("nav_matches")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.Notifications,
+                        onClick = { currentScreen = Screen.Notifications },
+                        icon = { Icon(if (currentScreen == Screen.Notifications) Icons.Filled.Notifications else Icons.Outlined.Notifications, contentDescription = "Notifications") },
+                        label = { Text("Alerts") },
+                        modifier = Modifier.testTag("nav_notifications")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.Profile,
+                        onClick = { currentScreen = Screen.Profile },
+                        icon = { Icon(if (currentScreen == Screen.Profile) Icons.Filled.Person else Icons.Outlined.Person, contentDescription = "Profile") },
+                        label = { Text("Profile") },
+                        modifier = Modifier.testTag("nav_profile")
+                    )
                 }
             }
         }
-
-        is UserProfileState.Loaded -> {
-            val userProfile = state.profile
-
-            // Centralized Call Launcher with Level Gating and caller photo
-            val handleStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit = { targetUid, targetName, isVideo ->
-                val progression = UserLevelManager.calculateProgression(userProfile)
-                if (!isVideo && !progression.isVoiceCallAllowed) {
-                    callLockMessage = "Voice Calling is unlocked at Level 2 (Member). Keep using Bondly to progress!\n\nRequirement: 7+ days on Bondly and 5 active days."
-                } else if (isVideo && !progression.isVideoCallAllowed) {
-                    callLockMessage = "Video Calling is unlocked at Level 3 (Trusted). Keep using Bondly to progress!\n\nRequirement: 30+ days on Bondly and 15 active days."
-                } else {
-                    scope.launch {
-                        val sessionResult = repository.initiateCall(
-                            receiverUid = targetUid,
-                            receiverName = targetName,
-                            callerName = userProfile.displayName,
-                            callType = if (isVideo) "video" else "audio",
-                            callerPhotoUrl = userProfile.profilePhotoUrls.firstOrNull() ?: ""
-                        )
-                        sessionResult.onSuccess { session ->
-                            currentScreen = Screen.Call(
-                                callId = session.callId,
-                                targetUid = targetUid,
-                                targetName = targetName,
-                                isVideo = isVideo,
-                                isIncoming = false
-                            )
-                        }
-                    }
-                }
-            }
-
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
             when (val screen = currentScreen) {
-                is Screen.Main -> {
-                    Scaffold(
-                        bottomBar = {
-                            NavigationBar(
-                                containerColor = CharcoalCard,
-                                tonalElevation = 8.dp
-                            ) {
-                                // 0: Discover
-                                NavigationBarItem(
-                                    selected = selectedTab == 0,
-                                    onClick = { selectedTab = 0; chatTargetUid = null },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selectedTab == 0) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                                            contentDescription = "Discover",
-                                            tint = if (selectedTab == 0) BondlyPink else TextMuted
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = "Discover",
-                                            color = if (selectedTab == 0) TextWhite else TextMuted,
-                                            fontSize = 11.sp
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = Color(0x33FF2D75)
-                                    )
-                                )
-
-                                // 1: Matches
-                                NavigationBarItem(
-                                    selected = selectedTab == 1,
-                                    onClick = { selectedTab = 1 },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selectedTab == 1) Icons.Filled.Chat else Icons.Outlined.Chat,
-                                            contentDescription = "Matches",
-                                            tint = if (selectedTab == 1) BondlyPink else TextMuted
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = "Matches",
-                                            color = if (selectedTab == 1) TextWhite else TextMuted,
-                                            fontSize = 11.sp
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = Color(0x33FF2D75)
-                                    )
-                                )
-
-                                // 2: Notifications / Alerts (Moved to bottom navigation bar)
-                                NavigationBarItem(
-                                    selected = selectedTab == 2,
-                                    onClick = { selectedTab = 2; chatTargetUid = null },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selectedTab == 2) Icons.Filled.Notifications else Icons.Outlined.Notifications,
-                                            contentDescription = "Alerts",
-                                            tint = if (selectedTab == 2) BondlyPink else TextMuted
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = "Alerts",
-                                            color = if (selectedTab == 2) TextWhite else TextMuted,
-                                            fontSize = 11.sp
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = Color(0x33FF2D75)
-                                    )
-                                )
-
-                                // 3: Profile Overview
-                                NavigationBarItem(
-                                    selected = selectedTab == 3,
-                                    onClick = { selectedTab = 3; chatTargetUid = null },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selectedTab == 3) Icons.Filled.Person else Icons.Outlined.Person,
-                                            contentDescription = "Profile",
-                                            tint = if (selectedTab == 3) BondlyPink else TextMuted
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = "Profile",
-                                            color = if (selectedTab == 3) TextWhite else TextMuted,
-                                            fontSize = 11.sp
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = Color(0x33FF2D75)
-                                    )
-                                )
-                            }
-                        }
-                    ) { innerPadding ->
-                        Box(modifier = Modifier.padding(innerPadding)) {
-                            when (selectedTab) {
-                                0 -> DiscoverScreen(
-                                    currentUserId = currentUserId,
-                                    currentUserProfile = userProfile,
-                                    repository = repository,
-                                    onNavigateToSearchById = { currentScreen = Screen.SearchById },
-                                    onNavigateToProfileDetails = { targetUid ->
-                                        currentScreen = Screen.PublicProfile(targetUid)
-                                    },
-                                    onNavigateToChat = { targetUid ->
-                                        chatTargetUid = targetUid
-                                        selectedTab = 1
-                                    },
-                                    onStartCall = handleStartCall
-                                )
-                                1 -> MatchesAndChatScreen(
-                                    currentUserId = currentUserId,
-                                    repository = repository,
-                                    selectedTargetUid = chatTargetUid,
-                                    onStartCall = handleStartCall
-                                )
-                                2 -> NotificationsScreen(
-                                    currentUserId = currentUserId,
-                                    repository = repository,
-                                    onBack = { selectedTab = 0 },
-                                    onNavigateToMatches = {
-                                        selectedTab = 1
-                                    }
-                                )
-                                3 -> ProfileScreen(
-                                    currentUserId = currentUserId,
-                                    userProfile = userProfile,
-                                    onNavigateToSettings = { currentScreen = Screen.Settings }
-                                )
-                            }
-                        }
-                    }
+                is Screen.Discover -> {
+                    DiscoverScreen(
+                        repository = repository,
+                        myProfile = currentProfile ?: UserProfile(),
+                        onProfileClick = { target -> navigateTo(Screen.PublicProfile(target)) },
+                        onRequestCall = { target, isVideo -> requestCall(target, isVideo) }
+                    )
                 }
-
-                is Screen.SearchById -> {
-                    BackHandler { currentScreen = Screen.Main }
+                is Screen.Search -> {
                     SearchByIdScreen(
-                        currentUserId = currentUserId,
                         repository = repository,
-                        onBack = { currentScreen = Screen.Main },
-                        onViewProfile = { targetUid -> currentScreen = Screen.PublicProfile(targetUid) },
-                        onStartCall = handleStartCall
+                        onUserFound = { userProfile -> navigateTo(Screen.PublicProfile(userProfile)) }
                     )
                 }
-
-                is Screen.PublicProfile -> {
-                    BackHandler { currentScreen = Screen.Main }
-                    PublicProfileScreen(
-                        targetUserId = screen.userId,
-                        currentUserId = currentUserId,
+                is Screen.Matches -> {
+                    MatchesScreen(
                         repository = repository,
-                        onBack = { currentScreen = Screen.Main },
-                        onNavigateToChat = { targetUid ->
-                            chatTargetUid = targetUid
-                            selectedTab = 1
-                            currentScreen = Screen.Main
-                        },
-                        onStartCall = handleStartCall
-                    )
-                }
-
-                is Screen.EditProfile -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    EditProfileScreen(
-                        currentUserId = currentUserId,
-                        userProfile = userProfile,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Settings },
-                        onNavigateToPhotoManagement = { currentScreen = Screen.PhotoManagement }
-                    )
-                }
-
-                is Screen.PhotoManagement -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    PhotoManagementScreen(
-                        currentUserId = currentUserId,
-                        userProfile = userProfile,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Settings }
-                    )
-                }
-
-                is Screen.CallHistory -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    CallHistoryScreen(
-                        currentUserId = currentUserId,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Settings },
-                        onStartCall = handleStartCall
-                    )
-                }
-
-                is Screen.Settings -> {
-                    BackHandler { currentScreen = Screen.Main }
-                    SettingsScreen(
-                        currentUserId = currentUserId,
-                        userProfile = userProfile,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Main },
-                        onNavigateToEditProfile = { currentScreen = Screen.EditProfile },
-                        onNavigateToPhotoManagement = { currentScreen = Screen.PhotoManagement },
-                        onNavigateToCallHistory = { currentScreen = Screen.CallHistory },
-                        onNavigateToPrivacySafety = { currentScreen = Screen.PrivacySafetySettings },
-                        onNavigateToBlockedUsers = { currentScreen = Screen.BlockedUsers },
-                        onNavigateToAccountDeletion = { currentScreen = Screen.AccountDeletion },
-                        onNavigateToHelp = { currentScreen = Screen.HelpSupport },
-                        onNavigateToAdmin = { currentScreen = Screen.Admin },
-                        onSignOut = onSignOut
-                    )
-                }
-
-                is Screen.PrivacySafetySettings -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    PrivacyAndSafetySettingsScreen(
-                        currentUserId = currentUserId,
-                        userProfile = userProfile,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Settings },
-                        onNavigateToBlockedUsers = { currentScreen = Screen.BlockedUsers }
-                    )
-                }
-
-                is Screen.BlockedUsers -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    BlockedUsersScreen(
-                        currentUserId = currentUserId,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Settings }
-                    )
-                }
-
-                is Screen.ReportUser -> {
-                    BackHandler { currentScreen = Screen.Main }
-                    ReportUserScreen(
-                        targetUserId = screen.targetUid,
-                        targetUserName = screen.targetName,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Main }
-                    )
-                }
-
-                is Screen.AccountDeletion -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    AccountDeletionScreen(
-                        currentUserId = currentUserId,
-                        repository = repository,
-                        onBack = { currentScreen = Screen.Settings },
-                        onAccountDeleted = {
-                            Firebase.auth.signOut()
-                            onSignOut()
+                        onOpenChat = { match, partnerId, partnerName, partnerPhoto ->
+                            navigateTo(Screen.Chat(match.id, partnerName, partnerPhoto, partnerId))
                         }
                     )
                 }
-
-                is Screen.HelpSupport -> {
-                    BackHandler { currentScreen = Screen.Main }
-                    HelpAndSupportScreen(
-                        onBack = { currentScreen = Screen.Main }
+                is Screen.Notifications -> {
+                    NotificationsScreen(repository = repository)
+                }
+                is Screen.Profile -> {
+                    ProfileOverviewScreen(
+                        profile = currentProfile ?: UserProfile(),
+                        onOpenSettings = { navigateTo(Screen.Settings) }
                     )
                 }
-
-                is Screen.Admin -> {
-                    BackHandler { currentScreen = Screen.Settings }
-                    AdminModerationScreen(
+                is Screen.Settings -> {
+                    SettingsScreen(
+                        profile = currentProfile ?: UserProfile(),
+                        onEditProfile = { navigateTo(Screen.EditProfile) },
+                        onOpenHelp = { navigateTo(Screen.HelpSupport) },
+                        onOpenAdmin = { navigateTo(Screen.Admin) },
+                        onDeleteAccount = { navigateTo(Screen.AccountDeletion) },
+                        onSignOut = {
+                            repository.signOut()
+                            currentScreen = Screen.Discover
+                        },
+                        onBack = { navigateBack() }
+                    )
+                }
+                is Screen.EditProfile -> {
+                    EditProfileScreen(
+                        profile = currentProfile ?: UserProfile(),
+                        onSave = { updated ->
+                            coroutineScope.launch {
+                                repository.saveProfile(updated)
+                                Toast.makeText(context, "Profile updated successfully!", Toast.LENGTH_SHORT).show()
+                                navigateBack()
+                            }
+                        },
+                        onBack = { navigateBack() }
+                    )
+                }
+                is Screen.Chat -> {
+                    ChatScreen(
                         repository = repository,
-                        onBack = { currentScreen = Screen.Settings }
+                        matchId = screen.matchId,
+                        partnerName = screen.partnerName,
+                        partnerPhoto = screen.partnerPhoto,
+                        partnerUid = screen.partnerUid,
+                        myLevel = currentProfile?.userLevel ?: 1,
+                        onRequestCall = { isVideo ->
+                            coroutineScope.launch {
+                                val partnerProfile = repository.getProfile(screen.partnerUid)
+                                if (partnerProfile != null) {
+                                    requestCall(partnerProfile, isVideo)
+                                }
+                            }
+                        },
+                        onBack = { navigateBack() }
                     )
                 }
-
                 is Screen.Call -> {
-                    BackHandler {
-                        currentScreen = Screen.Main
-                    }
                     CallScreen(
+                        repository = repository,
                         callId = screen.callId,
-                        targetUid = screen.targetUid,
                         targetName = screen.targetName,
                         isVideo = screen.isVideo,
-                        isIncoming = screen.isIncoming,
-                        repository = repository,
-                        onCallFinished = { currentScreen = Screen.Main }
+                        onEndCall = {
+                            coroutineScope.launch {
+                                repository.updateCallStatus(screen.callId, "ended")
+                                navigateBack()
+                            }
+                        }
+                    )
+                }
+                is Screen.PublicProfile -> {
+                    PublicProfileDetailScreen(
+                        profile = screen.profile,
+                        onLike = {
+                            coroutineScope.launch {
+                                repository.sendLike(screen.profile.userId)
+                                Toast.makeText(context, "Interest sent to ${screen.profile.displayName}!", Toast.LENGTH_SHORT).show()
+                                navigateBack()
+                            }
+                        },
+                        onBlock = {
+                            coroutineScope.launch {
+                                repository.blockUser(screen.profile.userId)
+                                Toast.makeText(context, "User blocked", Toast.LENGTH_SHORT).show()
+                                navigateBack()
+                            }
+                        },
+                        onReport = { reason ->
+                            coroutineScope.launch {
+                                repository.reportUser(screen.profile.userId, reason, "Flagged from profile")
+                                Toast.makeText(context, "Report submitted", Toast.LENGTH_SHORT).show()
+                                navigateBack()
+                            }
+                        },
+                        onRequestCall = { isVideo -> requestCall(screen.profile, isVideo) },
+                        onBack = { navigateBack() }
+                    )
+                }
+                is Screen.HelpSupport -> {
+                    HelpSupportScreen(onBack = { navigateBack() })
+                }
+                is Screen.Admin -> {
+                    AdminModerationScreen(onBack = { navigateBack() })
+                }
+                is Screen.AccountDeletion -> {
+                    AccountDeletionScreen(
+                        onConfirmDelete = {
+                            coroutineScope.launch {
+                                repository.deleteAccount()
+                                Toast.makeText(context, "Account permanently deleted", Toast.LENGTH_SHORT).show()
+                                currentScreen = Screen.Discover
+                            }
+                        },
+                        onBack = { navigateBack() }
+                    )
+                }
+                is Screen.Onboarding -> {
+                    OnboardingScreen(
+                        initialProfile = currentProfile ?: UserProfile(),
+                        onSave = { updated ->
+                            coroutineScope.launch {
+                                repository.saveProfile(updated.copy(profileCompleted = true))
+                                currentScreen = Screen.Discover
+                            }
+                        }
                     )
                 }
             }
         }
+    }
+}
+
+// Google Sign-In helper using Credential Manager
+suspend fun signInWithGoogle(context: Context, repository: BondlyRepository, onResult: (String?) -> Unit) {
+    val credentialManager = CredentialManager.create(context)
+    val googleIdOption = GetSignInWithGoogleOption.Builder("148637707279-ls6kl35m66at95q60ufmdfgb8nf07tds.apps.googleusercontent.com")
+        .build()
+
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(googleIdOption)
+        .build()
+
+    try {
+        val result = credentialManager.getCredential(context = context, request = request)
+        val credential = result.credential
+        if (credential is GoogleIdTokenCredential) {
+            val idToken = credential.idToken
+            val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
+            val authResult = com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(firebaseCred).await()
+            val user = authResult.user
+            if (user != null) {
+                // Ensure initial profile exists
+                val existing = repository.getProfile(user.uid)
+                if (existing == null) {
+                    val newProfile = UserProfile(
+                        userId = user.uid,
+                        displayName = user.displayName ?: "New User",
+                        profilePhotoUrls = if (user.photoUrl != null) listOf(user.photoUrl.toString()) else emptyList()
+                    )
+                    repository.saveProfile(newProfile)
+                }
+                onResult(null)
+            }
+        }
+    } catch (e: GetCredentialException) {
+        onResult(e.localizedMessage)
+    } catch (e: Exception) {
+        onResult(e.localizedMessage)
     }
 }
