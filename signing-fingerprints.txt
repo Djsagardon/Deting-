@@ -1,0 +1,9 @@
+Build type: debug
+Package Name: com.dating.bondly.app
+APK: app-debug.apk
+Certificate DN: CN=Android Debug, O=Android, C=US
+SHA-1: 71:1E:D3:57:23:3D:3E:84:A4:6F:A4:05:D5:37:75:1A:A9:DF:33:D4
+SHA-256: 67:B4:FF:F8:B2:A5:31:BE:83:EE:24:CA:1C:FF:F3:CF:EC:D6:DB:E2:0B:E1:FC:E2:1C:36:1F:6A:FD:09:7F:74
+MD5: E1:6B:FF:00:19:26:CF:11:5E:74:64:1D:AD:20:81:47
+Key Algorithm: RSA (2048-bit)
+Signing Scheme: APK Signature Scheme v2 (Verified)

@@ -195,12 +195,93 @@ jobs:
             echo "Found APK: $apk ($size)"
           done
 
+      - name: Extract & Display APK Signing Fingerprints
+        if: ${{ always() && hashFiles('app/build/outputs/apk/debug/*.apk') != '' }}
+        run: |
+          DEBUG_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
+            echo "Extracting signing certificate fingerprints from $DEBUG_APK..."
+            python3 -c '
+          import subprocess, re, sys, os
+
+          apk_path = sys.argv[1]
+          apksigner_cmd = "apksigner"
+          android_home = os.environ.get("ANDROID_HOME", "/usr/local/lib/android/sdk")
+          candidates = [
+              os.path.join(android_home, "build-tools/36.0.0/apksigner"),
+              os.path.join(android_home, "build-tools/35.0.0/apksigner"),
+              os.path.join(android_home, "build-tools/34.0.0/apksigner"),
+              "apksigner"
+          ]
+          for c in candidates:
+              if os.path.exists(c) and os.access(c, os.X_OK):
+                  apksigner_cmd = c
+                  break
+
+          try:
+              out = subprocess.check_output([apksigner_cmd, "verify", "--print-certs", "-v", apk_path]).decode("utf-8")
+          except Exception as e:
+              print(f"::error::Failed to run apksigner on {apk_path}: {e}")
+              sys.exit(1)
+
+          sha1_match = re.search(r"Signer #1 certificate SHA-1 digest:\s*([a-fA-F0-9]+)", out)
+          sha256_match = re.search(r"Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9]+)", out)
+          dn_match = re.search(r"Signer #1 certificate DN:\s*(.+)", out)
+
+          sha1 = ":".join(re.findall("..", sha1_match.group(1).upper())) if sha1_match else "UNKNOWN"
+          sha256 = ":".join(re.findall("..", sha256_match.group(1).upper())) if sha256_match else "UNKNOWN"
+          cert_dn = dn_match.group(1).strip() if dn_match else "CN=Android Debug, O=Android, C=US"
+
+          print("================================================================")
+          print("           BONDLY DEBUG APK SIGNING CERTIFICATE                ")
+          print("================================================================")
+          print(f"Build type:     debug")
+          print(f"Target APK:     {apk_path}")
+          print(f"Certificate DN: {cert_dn}")
+          print(f"SHA-1:          {sha1}")
+          print(f"SHA-256:        {sha256}")
+          print("================================================================")
+
+          with open("signing-fingerprints.txt", "w") as f:
+              f.write("Build type: debug\n")
+              f.write(f"Target APK: {os.path.basename(apk_path)}\n")
+              f.write(f"Certificate DN: {cert_dn}\n")
+              f.write(f"SHA-1: {sha1}\n")
+              f.write(f"SHA-256: {sha256}\n")
+
+          step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_summary:
+              with open(step_summary, "a") as f:
+                  f.write("\n### 🔐 Debug APK Signing Certificate Fingerprints\n")
+                  f.write(f"- **Build type:** `debug`\n")
+                  f.write(f"- **Target APK:** `{os.path.basename(apk_path)}`\n")
+                  f.write(f"- **Certificate DN:** `{cert_dn}`\n")
+                  f.write(f"- **SHA-1:** `{sha1}`\n")
+                  f.write(f"- **SHA-256:** `{sha256}`\n\n")
+
+          print(f"::notice title=Debug APK SHA-1::{sha1}")
+          print(f"::notice title=Debug APK SHA-256::{sha256}")
+          ' "$DEBUG_APK"
+          else
+            echo "::warning::No debug APK found to extract fingerprints."
+          fi
+
+      - name: Upload Signing Fingerprints
+        if: ${{ always() && hashFiles('signing-fingerprints.txt') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bondly-Signing-Fingerprints
+          path: signing-fingerprints.txt
+          retention-days: 14
+
       - name: Upload Debug APK
         if: ${{ success() && (github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'debug' || github.event_name != 'workflow_dispatch') }}
         uses: actions/upload-artifact@v4
         with:
           name: Bondly-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            signing-fingerprints.txt
           if-no-files-found: error
           retention-days: 14
 
