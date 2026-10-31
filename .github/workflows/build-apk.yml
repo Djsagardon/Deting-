@@ -44,7 +44,46 @@ jobs:
           cache: 'gradle'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 'latest'
+          accept-android-sdk-licenses: 'true'
+          log-accepted-android-sdk-licenses: 'false'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Accept Android SDK Licenses & Pre-seed Hashes
+        run: |
+          echo "Non-interactively configuring and accepting all Android SDK licenses..."
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_HOME/licenses"
+
+          # Pre-seed verified license hashes so AGP and sdkmanager never prompt or stop
+          printf "24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n893fb8a22d82e324940bc61e56e60ac2ec82e5e9" > "$ANDROID_HOME/licenses/android-sdk-license"
+          printf "84831b9409646a918e30573bab4c9c91346d8abd\n27244462c7977d611b64e62a3000850f22473cb1\n793f25e32e60f54121a65dc82c52ac238ff990e1" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          printf "33b6a2b64f07f11b283f4566e68c51638ce497a9" > "$ANDROID_HOME/licenses/google-gdk-license"
+          printf "e9acab587f1749c4f81757fb6388acaa04d8b234" > "$ANDROID_HOME/licenses/mips-android-sysimage-license"
+          printf "601085b94cd77f0b54ff8640695709915000853d" > "$ANDROID_HOME/licenses/android-googletv-license"
+
+          # Fallback acceptance via sdkmanager command-line
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            yes | sdkmanager --licenses || true
+          fi
+
+      - name: Install Required Android SDK Packages
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(which sdkmanager 2>/dev/null || true)"
+          fi
+          if [ -n "$SDKMANAGER" ] && [ -x "$SDKMANAGER" ]; then
+            echo "Installing platforms;android-36 and build-tools;36.0.0..."
+            yes | "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          fi
 
       - name: Restore Firebase Configuration
         run: |
