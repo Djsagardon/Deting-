@@ -1,0 +1,121 @@
+name: Build Bondly Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build variant to produce'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - debug
+          - release
+
+jobs:
+  build-apk:
+    name: Build & Package APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore Firebase Configuration
+        run: |
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo "Restoring google-services.json from GitHub Secrets..."
+            echo "${{ secrets.GOOGLE_SERVICES_JSON }}" > app/google-services.json
+          elif [ -f "app/google-services.json" ]; then
+            echo "Using repository-committed app/google-services.json."
+          else
+            echo "::error::Missing app/google-services.json and GOOGLE_SERVICES_JSON secret is not set!"
+            exit 1
+          fi
+
+      - name: Restore Signing Keystore
+        run: |
+          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "Decoding release keystore from RELEASE_KEYSTORE_BASE64 secret..."
+            echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > debug.keystore
+          elif [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+            echo "Decoding keystore from debug.keystore.base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ -f "debug.keystore" ]; then
+            echo "Found existing debug.keystore."
+          else
+            echo "Generating fallback debug keystore..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Ensure Gradle Wrapper Executable
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          else
+            echo "::error::gradlew script not found in root directory!"
+            exit 1
+          fi
+
+      - name: Build Debug APK
+        if: ${{ github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'debug' || github.event_name != 'workflow_dispatch' }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Build Release APK
+        if: ${{ github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'release' || github.event_name != 'workflow_dispatch' }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Verify APK Generation
+        run: |
+          echo "### Generated APK Files" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | Path | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          for apk in $(find app/build/outputs/apk -name "*.apk"); do
+            size=$(du -h "$apk" | cut -f1)
+            name=$(basename "$apk")
+            echo "| $name | \`$apk\` | $size |" >> $GITHUB_STEP_SUMMARY
+            echo "Found APK: $apk ($size)"
+          done
+
+      - name: Upload Debug APK
+        if: ${{ success() && (github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'debug' || github.event_name != 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bondly-Debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Release APK
+        if: ${{ success() && (github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'release' || github.event_name != 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bondly-Release-APK
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 14

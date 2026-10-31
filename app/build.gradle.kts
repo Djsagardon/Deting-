@@ -80,6 +80,7 @@ dependencies {
     implementation(libs.firebase.ai)
     implementation(libs.firebase.appcheck.debug)
     implementation(libs.firebase.appcheck.recaptcha)
+    implementation(libs.firebase.messaging)
 
     // Google Sign-In & Credentials
     implementation(libs.androidx.credentials)
