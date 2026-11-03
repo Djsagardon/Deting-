@@ -58,6 +58,33 @@ object UserLevelManager {
         LevelInfo(5, "Bondly Star", "VIP badge, premium discovery & all perks", 30)
     )
 
+    data class ProgressionStatus(
+        val currentLevel: Int,
+        val currentLevelName: String,
+        val overallProgressFraction: Float,
+        val isVoiceCallAllowed: Boolean,
+        val isVideoCallAllowed: Boolean
+    )
+
+    fun calculateProgression(profile: UserProfile): ProgressionStatus {
+        val level = calculateLevel(profile)
+        val levelName = when (level) {
+            1 -> "Level 1 · New Member"
+            2 -> "Level 2 · Verified Member"
+            3 -> "Level 3 · Trusted Connector"
+            4 -> "Level 4 · Companion"
+            else -> "Level 5 · Bondly Star"
+        }
+        val progress = (profile.activeDaysCount / 15f).coerceIn(0.1f, 1f)
+        return ProgressionStatus(
+            currentLevel = level,
+            currentLevelName = levelName,
+            overallProgressFraction = progress,
+            isVoiceCallAllowed = level >= 2,
+            isVideoCallAllowed = level >= 3
+        )
+    }
+
     fun calculateLevel(profile: UserProfile): Int {
         val days = profile.activeDaysCount
         return when {

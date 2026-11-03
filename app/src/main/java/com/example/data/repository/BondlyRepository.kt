@@ -411,6 +411,111 @@ class BondlyRepository(
         }
     }
 
+    suspend fun findUserByPublicId(publicId: String): UserProfile? {
+        val index = searchUserByPublicId(publicId) ?: return null
+        return getProfile(index.userId)
+    }
+
+    fun observeCallHistory(): Flow<List<CallSession>> = callbackFlow {
+        val myUid = currentUid
+        if (myUid.isEmpty()) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+        val reg = firestore.collection("calls")
+            .whereEqualTo("callerUid", myUid)
+            .limit(30)
+            .addSnapshotListener { snap1, _ ->
+                val list1 = snap1?.documents?.mapNotNull { it.toObject(CallSession::class.java) } ?: emptyList()
+                firestore.collection("calls")
+                    .whereEqualTo("receiverUid", myUid)
+                    .limit(30)
+                    .get()
+                    .addOnSuccessListener { snap2 ->
+                        val list2 = snap2.documents.mapNotNull { it.toObject(CallSession::class.java) }
+                        val combined = (list1 + list2).distinctBy { it.callId }
+                        trySend(combined)
+                    }
+                    .addOnFailureListener {
+                        trySend(list1)
+                    }
+            }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeBlockedUserIds(): Flow<List<String>> = callbackFlow {
+        val myUid = currentUid
+        if (myUid.isEmpty()) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+        val reg = firestore.collection("blocks")
+            .whereEqualTo("blockerUid", myUid)
+            .addSnapshotListener { snapshot, _ ->
+                val list = snapshot?.documents?.mapNotNull { it.getString("blockedUid") } ?: emptyList()
+                trySend(list)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun unblockUser(targetUid: String): Result<Unit> {
+        return try {
+            val id = "${currentUid}_$targetUid"
+            firestore.collection("blocks").document(id).delete().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun observeModerationReports(): Flow<List<Report>> = callbackFlow {
+        val reg = firestore.collection("reports")
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(50)
+            .addSnapshotListener { snapshot, _ ->
+                val list = snapshot?.documents?.mapNotNull { it.toObject(Report::class.java) } ?: emptyList()
+                trySend(list)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun dismissReport(reportId: String): Result<Unit> {
+        return try {
+            firestore.collection("reports").document(reportId).delete().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun banUser(targetUid: String, reportId: String): Result<Unit> {
+        return try {
+            firestore.collection("users").document(targetUid).update("accountStatus", "banned").await()
+            dismissReport(reportId)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun markNotificationAsRead(notificationId: String) {
+        try {
+            val myUid = currentUid
+            if (myUid.isNotEmpty()) {
+                firestore.collection("users").document(myUid)
+                    .collection("notifications").document(notificationId)
+                    .update("read", true).await()
+            }
+        } catch (_: Exception) {}
+    }
+
+    suspend fun deleteCurrentUserAccount(): Result<Unit> = deleteAccount()
+
+    suspend fun submitReport(reportedUid: String, reportedName: String, reason: String, details: String): Result<Unit> =
+        reportUser(reportedUid, reason, details)
+
     fun signOut() {
         auth.signOut()
     }

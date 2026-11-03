@@ -35,7 +35,11 @@ data class UserProfile(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
     @ServerTimestamp val lastActiveAt: Timestamp? = null
-)
+) {
+    val isAdmin: Boolean get() = role == "admin"
+    val isOnline: Boolean get() = showOnlineStatus
+    val mobileNumber: String get() = maskedMobileNumber
+}
 
 sealed class UserProfileState {
     data object Loading : UserProfileState()
@@ -74,7 +78,9 @@ data class CallSession(
     val durationSeconds: Int = 0,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val endedAt: Timestamp? = null
-)
+) {
+    val startedAt: Timestamp? get() = createdAt
+}
 
 @IgnoreExtraProperties
 data class Match(
@@ -117,7 +123,10 @@ data class Report(
     val details: String = "",
     val status: String = "pending",
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    val reportId: String get() = id
+    val reportedName: String get() = reportedUid
+}
 
 @IgnoreExtraProperties
 data class NotificationItem(
@@ -129,7 +138,11 @@ data class NotificationItem(
     val targetId: String = "",
     val read: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    val isRead: Boolean get() = read
+    val timestamp: Timestamp? get() = createdAt
+    val body: String get() = message
+}
 
 @IgnoreExtraProperties
 data class PublicUserIndex(
