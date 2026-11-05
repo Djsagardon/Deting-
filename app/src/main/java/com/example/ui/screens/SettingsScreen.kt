@@ -163,16 +163,6 @@ fun SettingsScreen(
                             iconTint = BondlyGold,
                             onClick = onNavigateToHelp
                         )
-                        if (userProfile?.isAdmin == true) {
-                            Divider(color = CharcoalBorder, thickness = 0.5.dp)
-                            SettingsNavigationRow(
-                                title = "Admin Moderation Panel",
-                                subtitle = "Review reported users and safety flags",
-                                icon = Icons.Filled.AdminPanelSettings,
-                                iconTint = BondlyMagenta,
-                                onClick = onNavigateToAdmin
-                            )
-                        }
                     }
                 }
             }

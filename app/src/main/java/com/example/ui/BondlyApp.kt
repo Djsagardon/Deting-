@@ -80,6 +80,40 @@ private fun AuthenticatedAppContent(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
+    // Notification permission for Android 13+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Sync FCM Token
+    LaunchedEffect(currentUserId) {
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+                .addOnSuccessListener { token ->
+                    coroutineScope.launch {
+                        repository.registerFcmToken(token)
+                    }
+                }
+        } catch (_: Exception) {}
+    }
+
+    // Accurate User Session Tracking
+    DisposableEffect(currentUserId) {
+        val sessionStart = System.currentTimeMillis()
+        onDispose {
+            val duration = (System.currentTimeMillis() - sessionStart) / 1000L
+            coroutineScope.launch {
+                repository.logUserSession(duration)
+            }
+        }
+    }
+
     val currentProfile by repository.observeProfile(currentUserId).collectAsState(initial = null)
     val incomingCall by repository.observeIncomingCalls().collectAsState(initial = null)
 
@@ -345,7 +379,8 @@ private fun AuthenticatedAppContent(
                             currentUserId = currentUserId,
                             repository = repository,
                             onBack = { selectedTab = 0 },
-                            onNavigateToMatches = { selectedTab = 1 }
+                            onNavigateToMatches = { selectedTab = 1 },
+                            onNavigateToProfile = { uid -> navigateTo(Screen.PublicProfile(uid)) }
                         )
                         3 -> ProfileScreen(
                             currentUserId = currentUserId,
@@ -363,7 +398,8 @@ private fun AuthenticatedAppContent(
                         onViewProfile = { uid -> navigateTo(Screen.PublicProfile(uid)) },
                         onStartCall = { targetUid, targetName, isVideo ->
                             handleStartCall(targetUid, targetName, isVideo)
-                        }
+                        },
+                        onNavigateToAdminDashboard = { navigateTo(Screen.Admin) }
                     )
                 }
 
@@ -470,10 +506,11 @@ private fun AuthenticatedAppContent(
                 }
 
                 is Screen.Admin -> {
-                    AdminModerationScreen(
+                    AdminDashboardScreen(
                         currentUserId = currentUserId,
                         repository = repository,
-                        onBack = { navigateBack() }
+                        onBack = { navigateBack() },
+                        onViewUserProfile = { uid -> navigateTo(Screen.PublicProfile(uid)) }
                     )
                 }
 

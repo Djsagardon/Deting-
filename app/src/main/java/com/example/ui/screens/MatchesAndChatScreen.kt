@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,10 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,9 +51,6 @@ fun MatchesAndChatScreen(
     onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit,
     onNavigateToPublicProfile: (String) -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
-
     val matches by repository.observeMatches().collectAsState(initial = emptyList())
     var selectedMatch by remember { mutableStateOf<Match?>(null) }
 
@@ -101,7 +98,7 @@ fun MatchesAndChatScreen(
             }
         }
 
-        // INTEREST REQUESTS / NEW MATCHES HORIZONTAL CAROUSEL
+        // CONFIRMED MATCHES CAROUSEL
         if (matches.isNotEmpty()) {
             Text(
                 text = "New Connections",
@@ -152,7 +149,7 @@ fun MatchesAndChatScreen(
             HorizontalDivider(color = CharcoalBorder, thickness = 0.5.dp)
         }
 
-        // CONVERSATIONS LIST
+        // ALL CONFIRMED MATCHES LIST
         if (matches.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -188,7 +185,7 @@ fun MatchesAndChatScreen(
             }
         } else {
             Text(
-                text = "Messages",
+                text = "All Confirmed Matches",
                 color = TextLightGrey,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
@@ -232,18 +229,12 @@ fun MatchesAndChatScreen(
                             Spacer(modifier = Modifier.width(14.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = partnerName,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = TextWhite,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
+                                Text(
+                                    text = partnerName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextWhite,
+                                    fontWeight = FontWeight.SemiBold
+                                )
 
                                 Spacer(modifier = Modifier.height(4.dp))
 
@@ -280,12 +271,23 @@ fun ActiveChatView(
     onViewProfile: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val listState = rememberLazyListState()
 
     val messages by repository.observeMessages(match.id).collectAsState(initial = emptyList())
     var inputText by remember { mutableStateOf("") }
     var warningMessage by remember { mutableStateOf<String?>(null) }
+
+    // Auto mark all incoming messages as seen when reading
+    LaunchedEffect(match.id, messages.size) {
+        repository.markAllMessagesAsSeen(match.id)
+    }
+
+    // Auto-scroll to bottom on new message
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -316,13 +318,13 @@ fun ActiveChatView(
                     }
                 },
                 actions = {
-                    // Voice Call Button
-                    IconButton(onClick = { onStartCall(false) }) {
-                        Icon(Icons.Default.Call, contentDescription = "Voice Call", tint = BondlyPink)
-                    }
                     // Video Call Button
                     IconButton(onClick = { onStartCall(true) }) {
                         Icon(Icons.Default.Videocam, contentDescription = "Video Call", tint = BondlyPink)
+                    }
+                    // Voice Call Button
+                    IconButton(onClick = { onStartCall(false) }) {
+                        Icon(Icons.Default.Call, contentDescription = "Voice Call", tint = BondlyPink)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CharcoalSurface)
@@ -355,8 +357,9 @@ fun ActiveChatView(
                 }
             }
 
-            // Message List
+            // Message List - Chronological, newest at the bottom
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -364,7 +367,10 @@ fun ActiveChatView(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 12.dp)
             ) {
-                items(messages, key = { it.id }) { msg ->
+                itemsIndexed(
+                    items = messages,
+                    key = { index, msg -> if (msg.id.isNotEmpty()) msg.id else "msg_${index}_${msg.localTimestamp}" }
+                ) { _, msg ->
                     val isMine = msg.senderId == currentUserId
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -402,12 +408,15 @@ fun ActiveChatView(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Icon(
                                             imageVector = when (msg.status) {
-                                                "read", "seen" -> Icons.Default.DoneAll
+                                                "seen" -> Icons.Default.DoneAll
                                                 "delivered" -> Icons.Default.DoneAll
-                                                else -> Icons.Default.Done
+                                                "sent" -> Icons.Default.Done
+                                                else -> Icons.Default.Schedule
                                             },
                                             contentDescription = msg.status,
-                                            tint = if (msg.status == "seen" || msg.status == "read") SuperLikeBlue else TextWhite.copy(alpha = 0.7f),
+                                            tint = if (msg.status == "seen") SuperLikeBlue
+                                                   else if (msg.status == "delivered") TextWhite.copy(alpha = 0.9f)
+                                                   else TextWhite.copy(alpha = 0.6f),
                                             modifier = Modifier.size(13.dp)
                                         )
                                     }

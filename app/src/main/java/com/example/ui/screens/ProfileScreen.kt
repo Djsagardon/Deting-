@@ -236,10 +236,10 @@ fun ProfileScreen(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Text(
-                            text = progression.currentLevelName,
+                            text = if (profile.isAdmin) "Bondly Exclusive Account · Verified Admin" else progression.currentLevelName,
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = BondlyPink
+                            fontWeight = FontWeight.Bold,
+                            color = if (profile.isAdmin) BondlyGold else BondlyPink
                         )
 
                         Spacer(modifier = Modifier.height(6.dp))

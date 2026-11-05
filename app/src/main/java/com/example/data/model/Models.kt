@@ -24,19 +24,21 @@ data class UserProfile(
     val rulesAccepted: Boolean = false,
     val profileCompleted: Boolean = false,
     val verificationStatus: String = "unverified",
-    val accountStatus: String = "active",
+    val accountStatus: String = "active", // "active", "suspended", "banned"
     val allowCallsFrom: String = "matches",
     val showOnlineStatus: Boolean = true,
     val isPremium: Boolean = false,
     val userLevel: Int = 1,
     val activeDaysCount: Int = 1,
     val lastActiveDate: String = "",
-    val role: String = "user",
+    val role: String = "user", // "user" or "admin"
+    val fcmTokens: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
     @ServerTimestamp val lastActiveAt: Timestamp? = null
 ) {
     val isAdmin: Boolean get() = role == "admin"
+    val isExclusiveAccount: Boolean get() = role == "admin"
     val isOnline: Boolean get() = showOnlineStatus
     val mobileNumber: String get() = maskedMobileNumber
 }
@@ -56,11 +58,13 @@ data class ChatMessage(
     val senderId: String = "",
     val text: String = "",
     val imageUrl: String = "",
-    val status: String = "sent",
+    val status: String = "sent", // "sending", "sent", "delivered", "seen"
     val deletedForEveryone: Boolean = false,
     val deletedFor: List<String> = emptyList(),
     val localTimestamp: Long = System.currentTimeMillis(),
     @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val deliveredAt: Timestamp? = null,
+    @ServerTimestamp val seenAt: Timestamp? = null,
     @ServerTimestamp val deletedAt: Timestamp? = null
 )
 
@@ -91,10 +95,26 @@ data class Match(
     val user2Name: String = "",
     val user1Photo: String = "",
     val user2Photo: String = "",
+    val users: List<String> = emptyList(),
     val lastMessage: String = "",
     val lastMessageSenderId: String = "",
     val lastMessageTimestamp: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
+data class MatchRequest(
+    val id: String = "",
+    val senderId: String = "",
+    val receiverId: String = "",
+    val senderName: String = "",
+    val senderPhotoUrl: String = "",
+    val senderAge: Int = 0,
+    val senderCity: String = "",
+    val senderBio: String = "",
+    val status: String = "pending", // "pending", "accepted", "rejected"
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
 @IgnoreExtraProperties
@@ -104,6 +124,15 @@ data class Like(
     val toUserId: String = "",
     val type: String = "like",
     @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
+data class Rejection(
+    val id: String = "",
+    val rejectorUid: String = "",
+    val rejectedUid: String = "",
+    @ServerTimestamp val rejectedAt: Timestamp? = null,
+    val expiresAt: Timestamp? = null
 )
 
 @IgnoreExtraProperties
@@ -134,8 +163,10 @@ data class NotificationItem(
     val userId: String = "",
     val title: String = "",
     val message: String = "",
-    val type: String = "system",
+    val type: String = "system", // "match_request", "match_accepted", "chat", "call", "admin_announcement", "safety"
     val targetId: String = "",
+    val senderName: String = "",
+    val senderPhotoUrl: String = "",
     val read: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null
 ) {
@@ -153,4 +184,26 @@ data class PublicUserIndex(
     val gender: String = "",
     val age: Int = 0,
     val photoUrl: String = ""
+)
+
+@IgnoreExtraProperties
+data class UserSession(
+    val sessionId: String = "",
+    val userId: String = "",
+    val userGender: String = "",
+    val startedAt: Timestamp? = null,
+    val endedAt: Timestamp? = null,
+    val durationSeconds: Long = 0,
+    val dateString: String = ""
+)
+
+@IgnoreExtraProperties
+data class AdminAuditLog(
+    val logId: String = "",
+    val adminUid: String = "",
+    val adminEmail: String = "",
+    val action: String = "",
+    val targetUserId: String = "",
+    val details: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null
 )

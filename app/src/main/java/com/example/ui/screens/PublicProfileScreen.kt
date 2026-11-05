@@ -269,67 +269,102 @@ fun PublicProfileScreen(
 
                 // Actions Card
                 item {
-                    Row(
+                    var actionFeedback by remember { mutableStateOf<String?>(null) }
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Like Button
-                        IconButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    repository.sendLike(profile.userId)
-                                    likeSent = true
-                                }
-                            },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .background(if (likeSent) BondlyPink else CharcoalCardElevated)
-                                .border(1.5.dp, BondlyPink, CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Favorite,
-                                contentDescription = "Like Profile",
-                                tint = if (likeSent) TextWhite else BondlyPink,
-                                modifier = Modifier.size(28.dp)
-                            )
+                        if (actionFeedback != null) {
+                            Text(actionFeedback!!, color = BondlyPink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(modifier = Modifier.height(10.dp))
                         }
 
-                        // Voice Call
-                        IconButton(
-                            onClick = { onStartCall(profile.userId, profile.displayName, false) },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .background(CharcoalCardElevated)
-                                .border(1.5.dp, OnlineGreen, CircleShape)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Call,
-                                contentDescription = "Voice Call",
-                                tint = OnlineGreen,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+                            // Reject / Pass Button
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        repository.rejectUser(profile.userId)
+                                        actionFeedback = "Passed profile"
+                                        likeSent = false
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(CharcoalCardElevated)
+                                    .border(1.5.dp, CharcoalBorder, CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = "Reject",
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
 
-                        // Video Call
-                        IconButton(
-                            onClick = { onStartCall(profile.userId, profile.displayName, true) },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .background(CharcoalCardElevated)
-                                .border(1.5.dp, SuperLikeBlue, CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Videocam,
-                                contentDescription = "Video Call",
-                                tint = SuperLikeBlue,
-                                modifier = Modifier.size(28.dp)
-                            )
+                            // Match / Like Button
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        val matchRes = repository.sendLike(profile.userId)
+                                        likeSent = true
+                                        actionFeedback = if (matchRes.getOrDefault(false)) "It's a Mutual Match! 🎉" else "Match request sent! 💖"
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(if (likeSent) BondlyPink else CharcoalCardElevated)
+                                    .border(1.5.dp, BondlyPink, CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Favorite,
+                                    contentDescription = "Match Profile",
+                                    tint = if (likeSent) TextWhite else BondlyPink,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+
+                            // Voice Call
+                            IconButton(
+                                onClick = { onStartCall(profile.userId, profile.displayName, false) },
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(CharcoalCardElevated)
+                                    .border(1.5.dp, OnlineGreen, CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Call,
+                                    contentDescription = "Voice Call",
+                                    tint = OnlineGreen,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+
+                            // Video Call
+                            IconButton(
+                                onClick = { onStartCall(profile.userId, profile.displayName, true) },
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(CharcoalCardElevated)
+                                    .border(1.5.dp, SuperLikeBlue, CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Videocam,
+                                    contentDescription = "Video Call",
+                                    tint = SuperLikeBlue,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
                         }
                     }
                 }

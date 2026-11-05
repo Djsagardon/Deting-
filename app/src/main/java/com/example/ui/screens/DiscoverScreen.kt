@@ -172,7 +172,11 @@ fun DiscoverScreen(
                         onPass = {
                             if (!isSwiping) {
                                 isSwiping = true
-                                excludedIds = excludedIds + currentCandidate.userId
+                                val rejectedId = currentCandidate.userId
+                                excludedIds = excludedIds + rejectedId
+                                coroutineScope.launch {
+                                    repository.rejectUser(rejectedId)
+                                }
                                 if (currentIndex < candidates.size - 1) {
                                     currentIndex++
                                 } else {

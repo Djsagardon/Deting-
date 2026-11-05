@@ -1,0 +1,124 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'admin' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) && (
+        // Prevent normal users from escalating their own role to admin
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||
+        isAdmin()
+      ) || isAdmin();
+      allow delete: if isOwner(userId) || isAdmin();
+
+      // Notifications subcollection
+      match /notifications/{notificationId} {
+        allow read, update: if isOwner(userId);
+        allow create: if isAuthenticated();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // Public user search index
+    match /public_user_index/{publicId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // Rejections collection (48-hour hide rule)
+    match /rejections/{rejectionId} {
+      allow read, write: if isAuthenticated() && (
+        request.auth.uid == request.resource.data.rejectorUid ||
+        (resource != null && request.auth.uid == resource.data.rejectorUid)
+      );
+    }
+
+    // Match / Interest Requests
+    match /match_requests/{requestId} {
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        request.auth.uid == resource.data.senderId ||
+        request.auth.uid == resource.data.receiverId
+      );
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.senderId;
+      allow update: if isAuthenticated() && (
+        request.auth.uid == resource.data.senderId ||
+        request.auth.uid == resource.data.receiverId ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Likes collection
+    match /likes/{likeId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Matches collection
+    match /matches/{matchId} {
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        request.auth.uid in resource.data.users ||
+        request.auth.uid == resource.data.user1Id ||
+        request.auth.uid == resource.data.user2Id
+      );
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+
+      // Real-time Chat Messages
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && request.auth.uid == request.resource.data.senderId;
+        allow update: if isAuthenticated();
+        allow delete: if isAdmin() || (resource != null && request.auth.uid == resource.data.senderId);
+      }
+    }
+
+    // Calls collection
+    match /calls/{callId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Blocks collection
+    match /blocks/{blockId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Reports collection
+    match /reports/{reportId} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // User sessions & Time analytics
+    match /user_sessions/{sessionId} {
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow read: if isAdmin() || (resource != null && request.auth.uid == resource.data.userId);
+      allow update, delete: if isAdmin();
+    }
+
+    // Admin audit logs
+    match /admin_audit_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

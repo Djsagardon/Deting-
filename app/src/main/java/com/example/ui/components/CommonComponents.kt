@@ -209,8 +209,12 @@ fun LevelBadge(
     isAdmin: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    if (isAdmin) {
+        ExclusiveAccountBadge(modifier = modifier)
+        return
+    }
+
     val (label, bg, textColor) = when {
-        isAdmin -> Triple("ADMIN", BondlyPurple, TextWhite)
         level >= 3 -> Triple("LVL 3 · TRUSTED", BondlyGold, CharcoalDark)
         level == 2 -> Triple("LVL 2 · MEMBER", BondlyPink, TextWhite)
         else -> Triple("LVL 1 · NEW", CharcoalCardElevated, TextLightGrey)
@@ -227,6 +231,36 @@ fun LevelBadge(
             fontSize = 10.sp,
             fontWeight = FontWeight.ExtraBold,
             color = textColor,
+            letterSpacing = 0.5.sp
+        )
+    }
+}
+
+@Composable
+fun ExclusiveAccountBadge(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                    listOf(Color(0xFFFFD700), Color(0xFFFF2D55), Color(0xFF7B1FA2))
+                )
+            )
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Star,
+            contentDescription = "Exclusive",
+            tint = Color(0xFF121212),
+            modifier = Modifier.size(13.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "Bondly Exclusive Account",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
+            color = Color(0xFF121212),
             letterSpacing = 0.5.sp
         )
     }

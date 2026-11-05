@@ -34,7 +34,8 @@ fun SearchByIdScreen(
     repository: BondlyRepository,
     onBack: () -> Unit,
     onViewProfile: (String) -> Unit,
-    onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit
+    onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit,
+    onNavigateToAdminDashboard: () -> Unit = {}
 ) {
     val coroutineScope = rememberCoroutineScope()
     var searchInput by remember { mutableStateOf("") }
@@ -88,7 +89,7 @@ fun SearchByIdScreen(
                 OutlinedTextField(
                     value = searchInput,
                     onValueChange = {
-                        searchInput = it.uppercase(Locale.ROOT)
+                        searchInput = it
                         hasSearched = false
                         searchError = null
                     },
@@ -122,7 +123,21 @@ fun SearchByIdScreen(
                             searchError = null
                             coroutineScope.launch {
                                 try {
-                                    val user = repository.findUserByPublicId(query)
+                                    // Check secret admin access shortcut
+                                    if (query.equals("admin@123", ignoreCase = true)) {
+                                        val isAdmin = repository.checkIsAdmin(currentUserId)
+                                        if (isAdmin) {
+                                            isSearching = false
+                                            onNavigateToAdminDashboard()
+                                            return@launch
+                                        } else {
+                                            searchError = "No member found with ID: $query"
+                                            isSearching = false
+                                            return@launch
+                                        }
+                                    }
+
+                                    val user = repository.findUserByPublicId(query.uppercase(Locale.ROOT))
                                     searchResult = user
                                     if (user == null) {
                                         searchError = "No member found with ID: $query"

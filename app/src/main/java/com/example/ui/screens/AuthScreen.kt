@@ -83,20 +83,18 @@ fun AuthScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Logo
+            // New Brand Logo
             Box(
                 modifier = Modifier
-                    .size(90.dp)
-                    .clip(CircleShape)
-                    .background(BondlyPink.copy(alpha = 0.15f))
-                    .border(2.dp, BondlyPink, CircleShape),
+                    .size(100.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .border(2.dp, BondlyPink, RoundedCornerShape(24.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Favorite,
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.bondly_logo),
                     contentDescription = "Bondly Logo",
-                    tint = BondlyPink,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 
