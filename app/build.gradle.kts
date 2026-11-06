@@ -17,6 +17,12 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val cfWorkerUrl = (project.findProperty("cloudflareWorkerUrl") as? String)
+            ?.takeIf { it.isNotBlank() }
+            ?: System.getenv("CLOUDFLARE_WORKER_URL")
+            ?: "https://bondly-image-uploader.dating-buddy.workers.dev/upload"
+        buildConfigField("String", "CLOUDFLARE_WORKER_URL", "\"$cfWorkerUrl\"")
     }
 
     signingConfigs {

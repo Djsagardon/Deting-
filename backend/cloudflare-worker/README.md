@@ -58,7 +58,7 @@ When prompted:
 ```
 Enter a secret value: ********************************
 ```
-Paste your real **ImgBB API Key** and press **Enter**.
+Paste your real **ImgBB API Key** from [api.imgbb.com](https://api.imgbb.com/) and press **Enter**.
 
 > **Important**: This secret is encrypted on Cloudflare's edge servers. It is **never** checked into Git or exposed to the Android client.
 
@@ -82,7 +82,7 @@ curl https://bondly-image-uploader.<your-subdomain>.workers.dev/health
 ```
 Expected response:
 ```json
-{"status":"healthy","service":"bondly-image-uploader"}
+{"status":"healthy","service":"bondly-image-uploader","hasImgbbKey":true,"projectId":"dating-buddy-b3581"}
 ```
 
 The upload endpoint will be:
@@ -90,10 +90,27 @@ The upload endpoint will be:
 
 ---
 
-## Android App Integration
-The Bondly Android app uses `ImageUploadRepository.kt`, which communicates with this endpoint.
-You can configure the endpoint URL in the app's `ImageUploadRepository.kt` or `.env` file:
+## Configuring the Worker URL in Bondly Android App
 
-```kotlin
-const val CLOUDFLARE_WORKER_URL = "https://bondly-image-uploader.<your-subdomain>.workers.dev/upload"
+You have **three convenient ways** to set your deployed Cloudflare Worker URL in the app:
+
+### Option 1: In-App Upload Server Settings (Instant – No Rebuilding Needed!)
+1. Open the Bondly app on your Android device.
+2. Go to **Manage Photos** (or the Profile screen).
+3. Tap the **Cloud / Server Settings icon** in the top right corner.
+4. Paste your published Worker URL (e.g. `https://bondly-image-uploader.<your-subdomain>.workers.dev/upload`).
+5. Tap **Test Connection (/health)** to verify reachability and that `hasImgbbKey` is true.
+6. Tap **Save & Apply**. Your uploads will immediately use this server!
+
+### Option 2: GitHub Repository Secret (For Automatic GitHub Actions Builds)
+1. Go to your GitHub Repository -> **Settings** -> **Secrets and variables** -> **Actions**.
+2. Click **New repository secret**.
+3. Name: `CLOUDFLARE_WORKER_URL`
+4. Value: `https://bondly-image-uploader.<your-subdomain>.workers.dev/upload`
+5. The GitHub Actions build workflow will automatically inject this URL into your `app-debug.apk` and `app-release.apk`.
+
+### Option 3: Local Gradle Build
+When building locally with Gradle:
+```bash
+./gradlew assembleDebug -PcloudflareWorkerUrl="https://bondly-image-uploader.<your-subdomain>.workers.dev/upload"
 ```

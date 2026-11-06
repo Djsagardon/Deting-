@@ -118,6 +118,10 @@ fun SearchByIdScreen(
                     onClick = {
                         val query = searchInput.trim()
                         if (query.isNotEmpty()) {
+                            if (!com.example.util.NetworkConnectivityManager.isConnected()) {
+                                searchError = "No internet connection. Please connect to the internet and try again."
+                                return@IconButton
+                            }
                             isSearching = true
                             hasSearched = true
                             searchError = null
@@ -137,13 +141,13 @@ fun SearchByIdScreen(
                                         }
                                     }
 
-                                    val user = repository.findUserByPublicId(query.uppercase(Locale.ROOT))
+                                    val user = repository.findUserByPublicId(query, currentUserId)
                                     searchResult = user
                                     if (user == null) {
-                                        searchError = "No member found with ID: $query"
+                                        searchError = "No member found with ID: $query. Please verify the ID and try again."
                                     }
                                 } catch (e: Exception) {
-                                    searchError = e.localizedMessage ?: "Failed to search"
+                                    searchError = com.example.util.BondlyErrorClassifier.getUserFriendlyMessage(e)
                                 } finally {
                                     isSearching = false
                                 }

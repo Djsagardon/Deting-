@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +33,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.ui.components.PrimaryButton
 import com.example.ui.theme.*
+import com.example.util.NetworkConnectivityManager
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.Firebase
@@ -180,12 +182,40 @@ fun AuthScreen(
                 )
             }
 
+            val isOnline by NetworkConnectivityManager.isOnline.collectAsState()
+            if (!isOnline) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = BondlyPink.copy(alpha = 0.12f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(Icons.Default.WifiOff, contentDescription = null, tint = BondlyPink)
+                        Text(
+                            text = "No internet connection. Please connect to the internet and try again.",
+                            color = TextWhite,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(28.dp))
 
             // Google Sign In Button
             PrimaryButton(
                 text = "Continue with Google",
                 onClick = {
+                    if (!NetworkConnectivityManager.isConnected()) {
+                        errorMessage = "No internet connection. Please connect to the internet and try again."
+                        return@PrimaryButton
+                    }
                     isLoading = true
                     errorMessage = null
                     val activity = findActivity(context)

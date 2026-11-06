@@ -29,12 +29,22 @@ export default {
 
     // Health check endpoint
     if (url.pathname === "/" || url.pathname === "/health") {
-      return jsonResponse({ status: "healthy", service: "bondly-image-uploader" });
+      return jsonResponse({
+        status: "healthy",
+        service: "bondly-image-uploader",
+        hasImgbbKey: Boolean(env.IMGBB_API_KEY && env.IMGBB_API_KEY.trim().length > 0),
+        projectId: env.FIREBASE_PROJECT_ID || "dating-buddy-b3581"
+      });
     }
 
     // Upload endpoint
     if (url.pathname === "/upload" && request.method === "POST") {
       return handleUpload(request, env);
+    }
+
+    // Push Notification endpoint
+    if (url.pathname === "/notify" && request.method === "POST") {
+      return handleSendNotification(request, env);
     }
 
     return jsonResponse({ error: "Not Found", status: 404 }, 404);
@@ -46,7 +56,7 @@ function handleCors() {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept",
       "Access-Control-Max-Age": "86400"
     }
@@ -71,15 +81,15 @@ async function handleUpload(request, env) {
   try {
     // 1. Verify ImgBB Secret is configured
     const imgbbApiKey = env.IMGBB_API_KEY;
-    if (!imgbbApiKey) {
+    if (!imgbbApiKey || imgbbApiKey.trim().length === 0) {
       console.error("Missing IMGBB_API_KEY secret in Cloudflare Worker environment.");
       return jsonResponse({
-        error: "Server configuration error: ImgBB API key secret is missing.",
+        error: "Server configuration error: Upstream storage API key is not configured in worker secrets.",
         success: false
       }, 500);
     }
 
-    // 2. Authenticate Request with Firebase Auth Token
+    // 2. Authenticate Request with Auth Token
     const authHeader = request.headers.get("Authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return jsonResponse({
@@ -94,7 +104,7 @@ async function handleUpload(request, env) {
     const authResult = await verifyFirebaseToken(idToken, projectId);
     if (!authResult.valid) {
       return jsonResponse({
-        error: `Unauthorized: Invalid Firebase ID token (${authResult.reason})`,
+        error: `Unauthorized: Invalid authentication session (${authResult.reason})`,
         success: false
       }, 401);
     }
@@ -168,12 +178,20 @@ async function handleUpload(request, env) {
     });
 
     if (!imgbbResponse.ok) {
-      const errorText = await imgbbResponse.text();
-      console.error(`ImgBB upload failed with status ${imgbbResponse.status}: ${errorText}`);
+      let errorDetail = "Upstream storage service returned an error.";
+      try {
+        const errJson = await imgbbResponse.json();
+        if (errJson?.error?.message) {
+          errorDetail = `Storage service rejected upload: ${errJson.error.message}`;
+        }
+      } catch (_) {
+        const errorText = await imgbbResponse.text();
+        console.error(`Upstream upload failed with status ${imgbbResponse.status}: ${errorText}`);
+      }
       return jsonResponse({
-        error: "Upstream image provider returned an error.",
+        error: errorDetail,
         success: false
-      }, 502);
+      }, imgbbResponse.status >= 500 ? 502 : imgbbResponse.status);
     }
 
     const imgbbJson = await imgbbResponse.json();
@@ -205,6 +223,84 @@ async function handleUpload(request, env) {
       error: `Internal server error: ${err.message}`,
       success: false
     }, 500);
+  }
+}
+
+/**
+ * Handle push notification dispatch to FCM devices
+ */
+async function handleSendNotification(request, env) {
+  try {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return jsonResponse({ error: "Unauthorized: Missing Authorization token", success: false }, 401);
+    }
+
+    const idToken = authHeader.substring(7).trim();
+    const projectId = env.FIREBASE_PROJECT_ID || "dating-buddy-b3581";
+    const authResult = await verifyFirebaseToken(idToken, projectId);
+    if (!authResult.valid) {
+      return jsonResponse({ error: "Unauthorized: Invalid session", success: false }, 401);
+    }
+
+    const body = await request.json();
+    const { fcmTokens, title, body: msgBody, type, targetId, senderName } = body;
+
+    if (!fcmTokens || !Array.isArray(fcmTokens) || fcmTokens.length === 0) {
+      return jsonResponse({
+        success: true,
+        queued: false,
+        message: "No registered push device tokens provided. Notification saved to inbox."
+      });
+    }
+
+    const fcmServerKey = env.FCM_SERVER_KEY;
+    if (!fcmServerKey) {
+      return jsonResponse({
+        success: true,
+        queued: false,
+        tokenCount: fcmTokens.length,
+        message: `FCM_SERVER_KEY is not configured in worker secrets. Notification saved in inbox for ${fcmTokens.length} device(s).`
+      });
+    }
+
+    const fcmPayload = {
+      registration_ids: fcmTokens,
+      priority: "high",
+      notification: {
+        title: title || "Bondly",
+        body: msgBody || "New alert",
+        sound: "default"
+      },
+      data: {
+        title: title || "Bondly",
+        body: msgBody || "New alert",
+        type: type || "system",
+        targetId: targetId || "",
+        senderName: senderName || ""
+      }
+    };
+
+    const fcmRes = await fetch("https://fcm.googleapis.com/fcm/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `key=${fcmServerKey}`
+      },
+      body: JSON.stringify(fcmPayload)
+    });
+
+    const fcmResult = await fcmRes.json();
+    return jsonResponse({
+      success: true,
+      queued: true,
+      fcmResponse: fcmResult,
+      deliveredTo: fcmTokens.length
+    });
+
+  } catch (err) {
+    console.error("Error in /notify endpoint:", err);
+    return jsonResponse({ error: `Internal server error: ${err.message}`, success: false }, 500);
   }
 }
 

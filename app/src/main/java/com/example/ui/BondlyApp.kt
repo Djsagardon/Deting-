@@ -28,8 +28,10 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.*
 import com.example.data.repository.BondlyRepository
 import com.example.ui.components.IncomingCallDialog
+import com.example.ui.components.NoInternetScreen
 import com.example.ui.screens.*
 import com.example.ui.theme.*
+import com.example.util.NetworkConnectivityManager
 import com.example.util.UserLevelManager
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
@@ -40,6 +42,11 @@ import kotlinx.coroutines.launch
 fun BondlyApp(
     repository: BondlyRepository = remember { BondlyRepository() }
 ) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        NetworkConnectivityManager.initialize(context)
+    }
+
     var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
 
     DisposableEffect(Unit) {
@@ -80,6 +87,31 @@ private fun AuthenticatedAppContent(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
+    val isOnline by NetworkConnectivityManager.isOnline.collectAsState()
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(isOnline) {
+        if (isOnline) {
+            refreshTrigger++
+        }
+    }
+
+    // Strict Online-Only Barrier: When no internet connection, block all operations with clear message and Retry
+    if (!isOnline) {
+        NoInternetScreen(
+            onRetry = {
+                coroutineScope.launch {
+                    val live = NetworkConnectivityManager.probeLiveInternet()
+                    if (live) {
+                        NetworkConnectivityManager.checkConnectivity(false)
+                        refreshTrigger++
+                    }
+                }
+            }
+        )
+        return
+    }
+
     // Notification permission for Android 13+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -101,6 +133,28 @@ private fun AuthenticatedAppContent(
                     }
                 }
         } catch (_: Exception) {}
+    }
+
+    // Real-time live incoming notification listener for system tray alerts
+    LaunchedEffect(currentUserId) {
+        if (currentUserId.isNotEmpty()) {
+            com.example.service.BondlyNotificationManager.createNotificationChannels(context)
+            try {
+                repository.observeLiveIncomingNotifications(currentUserId).collect { notif ->
+                    com.example.service.BondlyNotificationManager.showSystemNotification(
+                        context = context,
+                        title = notif.title,
+                        message = notif.message,
+                        type = notif.type,
+                        targetId = notif.targetId,
+                        senderName = notif.senderName
+                    )
+                    repository.markNotificationAsDelivered(notif.id, currentUserId)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BondlyApp", "Live notification listener error: ${e.message}")
+            }
+        }
     }
 
     // Accurate User Session Tracking
@@ -163,6 +217,10 @@ private fun AuthenticatedAppContent(
     }
 
     fun handleStartCall(targetUid: String, targetName: String, isVideo: Boolean) {
+        if (!NetworkConnectivityManager.isConnected()) {
+            Toast.makeText(context, "No internet connection. Please connect to the internet and try again.", Toast.LENGTH_SHORT).show()
+            return
+        }
         val profile = currentProfile ?: UserProfile()
         val progression = UserLevelManager.calculateProgression(profile)
         if (isVideo) {

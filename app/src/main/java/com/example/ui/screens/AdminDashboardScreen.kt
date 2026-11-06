@@ -177,11 +177,15 @@ fun AdminDashboardScreen(
                 )
                 2 -> AdminCustomMessageTab(
                     users = allUsers,
-                    onSendMessage = { targetUid, title, body ->
+                    onSendMessage = { targetUid, title, body, onReport ->
                         coroutineScope.launch {
                             val res = repository.sendAdminCustomMessage(targetUid, title, body)
                             if (res.isSuccess) {
-                                Toast.makeText(context, "Official announcement delivered!", Toast.LENGTH_SHORT).show()
+                                val report = res.getOrNull()
+                                if (report != null) {
+                                    onReport(report)
+                                }
+                                Toast.makeText(context, report?.statusSummary ?: "Message saved to inbox", Toast.LENGTH_LONG).show()
                             } else {
                                 Toast.makeText(context, "Failed: ${res.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_SHORT).show()
                             }
@@ -341,11 +345,15 @@ private fun AdminUserManagementTab(
     var actionType by remember { mutableStateOf("suspend") }
 
     val filteredUsers = remember(users, searchQuery, statusFilter) {
+        val cleanQuery = searchQuery.trim()
+        val strippedQuery = cleanQuery.removePrefix("BND-").removePrefix("BONDLY-")
         users.filter { user ->
-            val matchQuery = searchQuery.isBlank() ||
-                    user.displayName.contains(searchQuery, ignoreCase = true) ||
-                    user.publicUserId.contains(searchQuery, ignoreCase = true) ||
-                    user.city.contains(searchQuery, ignoreCase = true)
+            val matchQuery = cleanQuery.isBlank() ||
+                    user.displayName.contains(cleanQuery, ignoreCase = true) ||
+                    user.publicUserId.contains(cleanQuery, ignoreCase = true) ||
+                    (strippedQuery.isNotEmpty() && user.publicUserId.contains(strippedQuery, ignoreCase = true)) ||
+                    user.userId.contains(cleanQuery, ignoreCase = true) ||
+                    user.city.contains(cleanQuery, ignoreCase = true)
             val matchStatus = statusFilter == "All" || user.accountStatus.equals(statusFilter, ignoreCase = true)
             matchQuery && matchStatus
         }
@@ -574,20 +582,25 @@ private fun AdminUserManagementTab(
 @Composable
 private fun AdminCustomMessageTab(
     users: List<UserProfile>,
-    onSendMessage: (targetUid: String, title: String, body: String) -> Unit
+    onSendMessage: (targetUid: String, title: String, body: String, onReport: (AdminMessageDeliveryReport) -> Unit) -> Unit
 ) {
     var searchUserText by remember { mutableStateOf("") }
     var selectedUser by remember { mutableStateOf<UserProfile?>(null) }
     var messageTitle by remember { mutableStateOf("Official Bondly Announcement") }
     var messageBody by remember { mutableStateOf("") }
     var showPreview by remember { mutableStateOf(false) }
+    var deliveryReport by remember { mutableStateOf<AdminMessageDeliveryReport?>(null) }
 
     val matchedCandidates = remember(searchUserText, users) {
-        if (searchUserText.isBlank()) emptyList()
+        val clean = searchUserText.trim()
+        val stripped = clean.removePrefix("BND-").removePrefix("BONDLY-")
+        if (clean.isBlank()) emptyList()
         else users.filter {
-            it.displayName.contains(searchUserText, ignoreCase = true) ||
-            it.publicUserId.contains(searchUserText, ignoreCase = true)
-        }.take(5)
+            it.displayName.contains(clean, ignoreCase = true) ||
+            it.publicUserId.contains(clean, ignoreCase = true) ||
+            (stripped.isNotEmpty() && it.publicUserId.contains(stripped, ignoreCase = true)) ||
+            it.userId.contains(clean, ignoreCase = true)
+        }.take(8)
     }
 
     LazyColumn(
@@ -729,13 +742,47 @@ private fun AdminCustomMessageTab(
                     onClick = {
                         val recipient = selectedUser
                         if (recipient != null && messageBody.isNotBlank()) {
-                            onSendMessage(recipient.userId, messageTitle, messageBody)
+                            onSendMessage(recipient.userId, messageTitle, messageBody) { rep ->
+                                deliveryReport = rep
+                            }
                             messageBody = ""
                         }
                     },
                     enabled = selectedUser != null && messageBody.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
+            }
+        }
+
+        // Live Delivery Status Report
+        if (deliveryReport != null) {
+            val rep = deliveryReport!!
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = CharcoalCardElevated),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, OnlineGreen),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = OnlineGreen, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Official Delivery Status Report", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = OnlineGreen)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("• Database Inbox: Saved successfully", fontSize = 12.sp, color = TextWhite)
+                        Text(
+                            text = if (rep.registeredDeviceCount > 0)
+                                "• Device Push: Queued for ${rep.registeredDeviceCount} active registered device(s)"
+                            else "• Device Push: 0 push tokens active (Recipient will view in Alerts upon next login)",
+                            fontSize = 12.sp,
+                            color = TextLightGrey
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("• Status: ${rep.statusSummary}", fontSize = 11.sp, color = TextMuted)
+                    }
+                }
             }
         }
 

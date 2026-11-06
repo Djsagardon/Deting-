@@ -188,12 +188,27 @@ data class NotificationItem(
     val senderName: String = "",
     val senderPhotoUrl: String = "",
     val read: Boolean = false,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val delivered: Boolean = false,
+    val deliveryStatus: String = "saved", // "saved", "queued", "delivered", "read"
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val deliveredAt: Timestamp? = null,
+    @ServerTimestamp val readAt: Timestamp? = null
 ) {
     val isRead: Boolean get() = read
+    val isDelivered: Boolean get() = delivered || deliveryStatus == "delivered" || read
     val timestamp: Timestamp? get() = createdAt
     val body: String get() = message
 }
+
+data class AdminMessageDeliveryReport(
+    val isSuccess: Boolean,
+    val messageId: String = "",
+    val isSavedInDatabase: Boolean = false,
+    val registeredDeviceCount: Int = 0,
+    val deliveryStatus: String = "saved",
+    val statusSummary: String = "",
+    val errorMessage: String? = null
+)
 
 @IgnoreExtraProperties
 data class PublicUserIndex(

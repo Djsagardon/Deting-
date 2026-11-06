@@ -461,6 +461,10 @@ fun ActiveChatView(
                     IconButton(
                         onClick = {
                             if (inputText.isNotBlank()) {
+                                if (!com.example.util.NetworkConnectivityManager.isConnected()) {
+                                    Toast.makeText(context, "No internet connection. Please connect to the internet and try again.", Toast.LENGTH_SHORT).show()
+                                    return@IconButton
+                                }
                                 val check = ContactSharingFilter.checkMessage(inputText, userLevel, isAdmin)
                                 if (check.isRestricted) {
                                     warningMessage = check.reason
@@ -470,7 +474,12 @@ fun ActiveChatView(
                                 inputText = ""
                                 warningMessage = null
                                 coroutineScope.launch {
-                                    repository.sendMessage(match.id, toSend)
+                                    val sendResult = repository.sendMessage(match.id, toSend)
+                                    sendResult.onFailure { err ->
+                                        inputText = toSend
+                                        val msg = com.example.util.BondlyErrorClassifier.getUserFriendlyMessage(err)
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         },

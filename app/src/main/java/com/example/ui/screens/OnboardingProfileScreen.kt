@@ -1009,6 +1009,11 @@ fun OnboardingProfileScreen(
                                             return@PrimaryButton
                                         }
 
+                                        if (!com.example.util.NetworkConnectivityManager.isConnected()) {
+                                            errorMessage = "No internet connection. Please connect to the internet and try again."
+                                            return@PrimaryButton
+                                        }
+
                                         isSaving = true
                                         coroutineScope.launch {
                                             try {
@@ -1035,12 +1040,17 @@ fun OnboardingProfileScreen(
                                                     profileCompleted = true,
                                                     userLevel = 1
                                                 )
-                                                repository.saveProfile(profileToSave)
+                                                val saveResult = repository.saveProfile(profileToSave)
                                                 isSaving = false
-                                                onProfileCreated()
+                                                if (saveResult.isSuccess) {
+                                                    onProfileCreated()
+                                                } else {
+                                                    val err = saveResult.exceptionOrNull()
+                                                    errorMessage = com.example.util.BondlyErrorClassifier.getUserFriendlyMessage(err)
+                                                }
                                             } catch (e: Exception) {
                                                 isSaving = false
-                                                errorMessage = e.localizedMessage ?: "Failed to save profile."
+                                                errorMessage = com.example.util.BondlyErrorClassifier.getUserFriendlyMessage(e)
                                             }
                                         }
                                     }

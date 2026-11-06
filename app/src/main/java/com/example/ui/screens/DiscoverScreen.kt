@@ -87,21 +87,43 @@ fun DiscoverScreen(
                     )
                 }
 
-                IconButton(
-                    onClick = onNavigateToSearchById,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(CharcoalCardElevated)
-                        .border(1.dp, CharcoalBorder, CircleShape)
-                        .testTag("search_by_id_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Search,
-                        contentDescription = "Search by Bondly ID",
-                        tint = BondlyPink,
-                        modifier = Modifier.size(20.dp)
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(
+                        onClick = {
+                            currentIndex = 0
+                            excludedIds = emptySet()
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(CharcoalCardElevated)
+                            .border(1.dp, CharcoalBorder, CircleShape)
+                            .testTag("refresh_discover_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Refresh",
+                            tint = TextLightGrey,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onNavigateToSearchById,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(CharcoalCardElevated)
+                            .border(1.dp, CharcoalBorder, CircleShape)
+                            .testTag("search_by_id_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = "Search by Bondly ID",
+                            tint = BondlyPink,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 
@@ -115,7 +137,7 @@ fun DiscoverScreen(
                 ) {
                     EmptyState(
                         title = "No More Profiles Right Now",
-                        description = "You've viewed all nearby compatible profiles. Check back later or search directly by Bondly ID.",
+                        description = "You've viewed all compatible profiles. Tap Refresh to check again or search directly by unique Bondly ID.",
                         icon = {
                             Box(
                                 modifier = Modifier
@@ -133,10 +155,22 @@ fun DiscoverScreen(
                             }
                         },
                         actionButton = {
-                            SecondaryButton(
-                                text = "Find by Public User ID",
-                                onClick = onNavigateToSearchById
-                            )
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                PrimaryButton(
+                                    text = "Refresh Profiles",
+                                    onClick = {
+                                        currentIndex = 0
+                                        excludedIds = emptySet()
+                                    }
+                                )
+                                SecondaryButton(
+                                    text = "Find by Public User ID",
+                                    onClick = onNavigateToSearchById
+                                )
+                            }
                         }
                     )
                 }

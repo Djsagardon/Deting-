@@ -313,6 +313,10 @@ fun EditProfileScreen(
                             Toast.makeText(context, "Display name cannot be empty", Toast.LENGTH_SHORT).show()
                             return@PrimaryButton
                         }
+                        if (!com.example.util.NetworkConnectivityManager.isConnected()) {
+                            Toast.makeText(context, "No internet connection. Please connect to the internet and try again.", Toast.LENGTH_SHORT).show()
+                            return@PrimaryButton
+                        }
                         isSaving = true
                         coroutineScope.launch {
                             val updated = base.copy(
@@ -324,10 +328,15 @@ fun EditProfileScreen(
                                 datingPreference = datingPreference,
                                 interests = selectedHobbies.toList()
                             )
-                            repository.saveProfile(updated)
+                            val saveResult = repository.saveProfile(updated)
                             isSaving = false
-                            Toast.makeText(context, "Profile updated successfully!", Toast.LENGTH_SHORT).show()
-                            onBack()
+                            if (saveResult.isSuccess) {
+                                Toast.makeText(context, "Profile updated successfully!", Toast.LENGTH_SHORT).show()
+                                onBack()
+                            } else {
+                                val msg = com.example.util.BondlyErrorClassifier.getUserFriendlyMessage(saveResult.exceptionOrNull())
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("save_profile_button")

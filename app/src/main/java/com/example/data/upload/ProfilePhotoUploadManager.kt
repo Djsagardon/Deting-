@@ -3,7 +3,10 @@ package com.example.data.upload
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.example.data.repository.BondlyRepository
 import com.example.data.repository.ImageUploadRepository
+import com.example.util.BondlyErrorClassifier
+import com.example.util.NetworkConnectivityManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +41,7 @@ sealed class PhotoSlotState {
 }
 
 class ProfilePhotoUploadManager(
+    private val repository: BondlyRepository = BondlyRepository(),
     private val imageRepo: ImageUploadRepository = ImageUploadRepository()
 ) {
     companion object {
@@ -193,6 +197,17 @@ class ProfilePhotoUploadManager(
 
                         Log.d(TAG, "Starting sequential upload for slot $nextIndex: $uriToUpload")
 
+                        if (!NetworkConnectivityManager.isConnected()) {
+                            updateSlotState(
+                                nextIndex,
+                                PhotoSlotState.Failed(
+                                    uriToUpload,
+                                    "No internet connection. Please connect to the internet and try again."
+                                )
+                            )
+                            continue
+                        }
+
                         // Perform the actual network upload via ImageUploadRepository
                         val result = imageRepo.uploadProfilePhoto(
                             appContext = appContext,
@@ -202,15 +217,36 @@ class ProfilePhotoUploadManager(
                         )
 
                         result.onSuccess { remoteUrl ->
-                            Log.d(TAG, "Slot $nextIndex upload succeeded: $remoteUrl")
-                            updateSlotState(nextIndex, PhotoSlotState.Success(uriToUpload, remoteUrl))
+                            Log.d(TAG, "Slot $nextIndex upload succeeded: $remoteUrl. Now persisting to live server...")
+                            // Strictly do not report success until confirmed saved on server
+                            if (userId.isNotEmpty()) {
+                                val saveResult = repository.updatePhotoSlotUrl(userId, nextIndex, remoteUrl)
+                                if (saveResult.isSuccess) {
+                                    Log.d(TAG, "Slot $nextIndex confirmed saved in live Firestore database.")
+                                    updateSlotState(nextIndex, PhotoSlotState.Success(uriToUpload, remoteUrl))
+                                } else {
+                                    val saveErr = saveResult.exceptionOrNull()
+                                    val errFriendly = BondlyErrorClassifier.getUserFriendlyMessage(saveErr)
+                                    Log.e(TAG, "Slot $nextIndex failed to save in Firestore: $errFriendly")
+                                    updateSlotState(
+                                        nextIndex,
+                                        PhotoSlotState.Failed(
+                                            uriToUpload,
+                                            "Photo uploaded, but server failed to save: $errFriendly"
+                                        )
+                                    )
+                                }
+                            } else {
+                                updateSlotState(nextIndex, PhotoSlotState.Success(uriToUpload, remoteUrl))
+                            }
                         }.onFailure { err ->
-                            Log.e(TAG, "Slot $nextIndex upload failed: ${err.message}")
+                            val friendlyMsg = BondlyErrorClassifier.getUserFriendlyMessage(err)
+                            Log.e(TAG, "Slot $nextIndex upload failed: $friendlyMsg")
                             updateSlotState(
                                 nextIndex,
                                 PhotoSlotState.Failed(
                                     uriToUpload,
-                                    err.localizedMessage ?: "Upload failed. Tap to retry."
+                                    friendlyMsg
                                 )
                             )
                         }
