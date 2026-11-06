@@ -1,0 +1,13 @@
+{
+  "name": "bondly-image-uploader",
+  "version": "1.0.0",
+  "description": "Secure Cloudflare Worker backend proxy for ImgBB uploads with Firebase Auth verification",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "keywords": ["cloudflare-worker", "imgbb", "firebase-auth", "bondly"],
+  "author": "Bondly App",
+  "license": "MIT"
+}

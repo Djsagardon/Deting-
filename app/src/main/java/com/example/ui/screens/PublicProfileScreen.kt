@@ -41,7 +41,10 @@ fun PublicProfileScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val targetProfile by repository.observeProfile(targetUserId).collectAsState(initial = null)
+    val incomingRequest by repository.observeMatchRequest(senderUid = targetUserId, receiverUid = currentUserId).collectAsState(initial = null)
+    val existingMatch by repository.observeMatchBetween(currentUserId, targetUserId).collectAsState(initial = null)
     var likeSent by remember { mutableStateOf(false) }
+    var isProcessingAction by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -269,101 +272,251 @@ fun PublicProfileScreen(
 
                 // Actions Card
                 item {
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     var actionFeedback by remember { mutableStateOf<String?>(null) }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    val isPendingRequest = incomingRequest?.status == "pending"
+                    val isMatched = existingMatch != null
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = CharcoalCard),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isPendingRequest) BondlyPink else if (isMatched) OnlineGreen else CharcoalBorder
+                        )
                     ) {
-                        if (actionFeedback != null) {
-                            Text(actionFeedback!!, color = BondlyPink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Spacer(modifier = Modifier.height(10.dp))
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // Reject / Pass Button
-                            IconButton(
-                                onClick = {
-                                    coroutineScope.launch {
-                                        repository.rejectUser(profile.userId)
-                                        actionFeedback = "Passed profile"
-                                        likeSent = false
+                            if (actionFeedback != null) {
+                                Text(actionFeedback!!, color = BondlyPink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
+
+                            if (isPendingRequest) {
+                                // CASE 1: INCOMING MATCH REQUEST PENDING
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = BondlyPink.copy(alpha = 0.15f),
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Filled.Favorite, contentDescription = null, tint = BondlyPink, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "${profile.displayName} wants to match with you!",
+                                            color = TextWhite,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
                                     }
-                                },
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(CharcoalCardElevated)
-                                    .border(1.5.dp, CharcoalBorder, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = "Reject",
-                                    tint = TextMuted,
-                                    modifier = Modifier.size(26.dp)
-                                )
-                            }
+                                }
 
-                            // Match / Like Button
-                            IconButton(
-                                onClick = {
-                                    coroutineScope.launch {
-                                        val matchRes = repository.sendLike(profile.userId)
-                                        likeSent = true
-                                        actionFeedback = if (matchRes.getOrDefault(false)) "It's a Mutual Match! 🎉" else "Match request sent! 💖"
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (!isProcessingAction) {
+                                                isProcessingAction = true
+                                                coroutineScope.launch {
+                                                    repository.rejectUser(profile.userId)
+                                                    isProcessingAction = false
+                                                    android.widget.Toast.makeText(context, "Match request passed", android.widget.Toast.LENGTH_SHORT).show()
+                                                    onBack()
+                                                }
+                                            }
+                                        },
+                                        enabled = !isProcessingAction,
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier.weight(1f).height(48.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextLightGrey)
+                                    ) {
+                                        Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(18.dp), tint = ErrorRed)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Reject Match", fontWeight = FontWeight.Bold)
                                     }
-                                },
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(if (likeSent) BondlyPink else CharcoalCardElevated)
-                                    .border(1.5.dp, BondlyPink, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Favorite,
-                                    contentDescription = "Match Profile",
-                                    tint = if (likeSent) TextWhite else BondlyPink,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
 
-                            // Voice Call
-                            IconButton(
-                                onClick = { onStartCall(profile.userId, profile.displayName, false) },
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(CharcoalCardElevated)
-                                    .border(1.5.dp, OnlineGreen, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Call,
-                                    contentDescription = "Voice Call",
-                                    tint = OnlineGreen,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
+                                    Button(
+                                        onClick = {
+                                            if (!isProcessingAction) {
+                                                isProcessingAction = true
+                                                coroutineScope.launch {
+                                                    val res = repository.acceptMatchRequest(profile.userId)
+                                                    isProcessingAction = false
+                                                    res.onSuccess {
+                                                        actionFeedback = "It's a Match! 🎉 Chat and Calls are now unlocked!"
+                                                        android.widget.Toast.makeText(context, "Matched with ${profile.displayName}! 🎉", android.widget.Toast.LENGTH_SHORT).show()
+                                                    }.onFailure {
+                                                        actionFeedback = "Error: ${it.localizedMessage}"
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isProcessingAction,
+                                        shape = RoundedCornerShape(14.dp),
+                                        modifier = Modifier.weight(1f).height(48.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = BondlyPink)
+                                    ) {
+                                        if (isProcessingAction) {
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextWhite, strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(Icons.Filled.Favorite, contentDescription = null, modifier = Modifier.size(18.dp), tint = TextWhite)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Accept Match", fontWeight = FontWeight.Bold, color = TextWhite)
+                                        }
+                                    }
+                                }
+                            } else if (isMatched) {
+                                // CASE 2: CONFIRMED MUTUAL MATCH
+                                Row(
+                                    modifier = Modifier.padding(bottom = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Filled.Celebration, contentDescription = null, tint = BondlyPink, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("You and ${profile.displayName} are matched 🎉", color = OnlineGreen, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
 
-                            // Video Call
-                            IconButton(
-                                onClick = { onStartCall(profile.userId, profile.displayName, true) },
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(CharcoalCardElevated)
-                                    .border(1.5.dp, SuperLikeBlue, CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Videocam,
-                                    contentDescription = "Video Call",
-                                    tint = SuperLikeBlue,
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Voice Call
+                                    IconButton(
+                                        onClick = { onStartCall(profile.userId, profile.displayName, false) },
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape)
+                                            .background(CharcoalCardElevated)
+                                            .border(1.5.dp, OnlineGreen, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Call,
+                                            contentDescription = "Voice Call",
+                                            tint = OnlineGreen,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+
+                                    // Video Call
+                                    IconButton(
+                                        onClick = { onStartCall(profile.userId, profile.displayName, true) },
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape)
+                                            .background(CharcoalCardElevated)
+                                            .border(1.5.dp, SuperLikeBlue, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Videocam,
+                                            contentDescription = "Video Call",
+                                            tint = SuperLikeBlue,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
+                            } else {
+                                // CASE 3: STANDARD PROFILE BROWSING
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Reject / Pass Button
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                repository.rejectUser(profile.userId)
+                                                actionFeedback = "Passed profile"
+                                                likeSent = false
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape)
+                                            .background(CharcoalCardElevated)
+                                            .border(1.5.dp, CharcoalBorder, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Pass",
+                                            tint = TextMuted,
+                                            modifier = Modifier.size(26.dp)
+                                        )
+                                    }
+
+                                    // Match / Like Button
+                                    IconButton(
+                                        onClick = {
+                                            coroutineScope.launch {
+                                                val matchRes = repository.sendLike(profile.userId)
+                                                matchRes.onSuccess { mutual ->
+                                                    likeSent = true
+                                                    actionFeedback = if (mutual) "It's a Mutual Match! 🎉" else "Match request sent! 💖"
+                                                }.onFailure { err ->
+                                                    actionFeedback = err.localizedMessage ?: "Failed to send request"
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape)
+                                            .background(if (likeSent) BondlyPink else CharcoalCardElevated)
+                                            .border(1.5.dp, BondlyPink, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Favorite,
+                                            contentDescription = "Match Profile",
+                                            tint = if (likeSent) TextWhite else BondlyPink,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+
+                                    // Voice Call
+                                    IconButton(
+                                        onClick = { onStartCall(profile.userId, profile.displayName, false) },
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape)
+                                            .background(CharcoalCardElevated)
+                                            .border(1.5.dp, OnlineGreen, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Call,
+                                            contentDescription = "Voice Call",
+                                            tint = OnlineGreen,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+
+                                    // Video Call
+                                    IconButton(
+                                        onClick = { onStartCall(profile.userId, profile.displayName, true) },
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(CircleShape)
+                                            .background(CharcoalCardElevated)
+                                            .border(1.5.dp, SuperLikeBlue, CircleShape)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Videocam,
+                                            contentDescription = "Video Call",
+                                            tint = SuperLikeBlue,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

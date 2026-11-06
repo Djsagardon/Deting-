@@ -18,6 +18,7 @@ data class UserProfile(
     val state: String = "",
     val maskedMobileNumber: String = "",
     val isMobileVerified: Boolean = false,
+    val mobileConfirmationStatus: String = "unconfirmed", // "unconfirmed", "in_app_confirmed", "verified"
     val profilePhotoUrls: List<String> = emptyList(),
     val totalPhotoCount: Int = 0,
     val datingPreference: String = "Anyone",
@@ -76,15 +77,29 @@ data class CallSession(
     val callerName: String = "",
     val callerPhotoUrl: String = "",
     val receiverName: String = "",
+    val receiverPhotoUrl: String = "",
     val channelName: String = "",
-    val callType: String = "voice",
-    val status: String = "initiated",
+    val callType: String = "voice", // "voice" or "video"
+    val status: String = "ringing", // "ringing", "accepted", "rejected", "ended", "busy", "timeout", "failed"
+    val offer: Map<String, String>? = null, // type: "offer", sdp: "..."
+    val answer: Map<String, String>? = null, // type: "answer", sdp: "..."
     val durationSeconds: Int = 0,
     @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val acceptedAt: Timestamp? = null,
     @ServerTimestamp val endedAt: Timestamp? = null
 ) {
     val startedAt: Timestamp? get() = createdAt
 }
+
+@IgnoreExtraProperties
+data class IceCandidateModel(
+    val id: String = "",
+    val sdpMid: String = "",
+    val sdpMLineIndex: Int = 0,
+    val sdp: String = "",
+    val serverUrl: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null
+)
 
 @IgnoreExtraProperties
 data class Match(
@@ -148,13 +163,18 @@ data class Report(
     val id: String = "",
     val reporterUid: String = "",
     val reportedUid: String = "",
+    val reportedName: String = "",
+    val reportedPhotoUrl: String = "",
+    val reportedPublicId: String = "",
     val reason: String = "",
+    val reasons: List<String> = emptyList(),
     val details: String = "",
-    val status: String = "pending",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val status: String = "pending", // "pending", "under_review", "resolved", "dismissed"
+    val adminNotes: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     val reportId: String get() = id
-    val reportedName: String get() = reportedUid
 }
 
 @IgnoreExtraProperties

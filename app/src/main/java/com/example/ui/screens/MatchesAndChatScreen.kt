@@ -68,6 +68,7 @@ fun MatchesAndChatScreen(
             partnerPhoto = partnerPhoto,
             currentUserId = currentUserId,
             userLevel = currentUserProfile.userLevel,
+            isAdmin = currentUserProfile.isAdmin,
             repository = repository,
             onBack = { selectedMatch = null },
             onStartCall = { isVideo -> onStartCall(partnerUid, partnerName, isVideo) },
@@ -265,6 +266,7 @@ fun ActiveChatView(
     partnerPhoto: String,
     currentUserId: String,
     userLevel: Int,
+    isAdmin: Boolean = false,
     repository: BondlyRepository,
     onBack: () -> Unit,
     onStartCall: (Boolean) -> Unit,
@@ -459,7 +461,7 @@ fun ActiveChatView(
                     IconButton(
                         onClick = {
                             if (inputText.isNotBlank()) {
-                                val check = ContactSharingFilter.checkMessage(inputText, userLevel)
+                                val check = ContactSharingFilter.checkMessage(inputText, userLevel, isAdmin)
                                 if (check.isRestricted) {
                                     warningMessage = check.reason
                                     return@IconButton

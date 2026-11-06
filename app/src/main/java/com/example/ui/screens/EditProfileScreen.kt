@@ -52,6 +52,7 @@ fun EditProfileScreen(
     val userProfile by repository.observeProfile(currentUserId).collectAsState(initial = null)
 
     var displayName by remember { mutableStateOf("") }
+    var gender by remember { mutableStateOf("") }
     var bio by remember { mutableStateOf("") }
     var city by remember { mutableStateOf("") }
     var selectedState by remember { mutableStateOf("") }
@@ -63,6 +64,7 @@ fun EditProfileScreen(
     LaunchedEffect(userProfile) {
         val p = userProfile ?: return@LaunchedEffect
         displayName = p.displayName
+        gender = p.gender
         bio = p.bio
         city = p.city
         selectedState = p.state
@@ -109,6 +111,42 @@ fun EditProfileScreen(
                         unfocusedTextColor = TextWhite
                     )
                 )
+            }
+
+            // Gender Selection
+            item {
+                Text("Gender", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    listOf("Woman", "Man", "Non-binary").forEach { option ->
+                        val isSelected = gender.equals(option, ignoreCase = true)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (isSelected) BondlyPink else CharcoalCard)
+                                .border(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) BondlyPink else CharcoalBorder,
+                                    shape = RoundedCornerShape(14.dp)
+                                )
+                                .clickable { gender = option }
+                                .padding(vertical = 12.dp)
+                                .testTag("edit_gender_$option"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = option,
+                                fontSize = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) TextWhite else TextLightGrey
+                            )
+                        }
+                    }
+                }
             }
 
             // Location
@@ -279,6 +317,7 @@ fun EditProfileScreen(
                         coroutineScope.launch {
                             val updated = base.copy(
                                 displayName = displayName.trim(),
+                                gender = gender.ifEmpty { base.gender },
                                 bio = bio.trim(),
                                 city = city.trim(),
                                 state = selectedState.trim(),

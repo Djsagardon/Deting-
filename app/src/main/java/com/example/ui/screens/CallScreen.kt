@@ -1,14 +1,9 @@
 package com.example.ui.screens
 
-import android.content.Context
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,21 +19,19 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.data.model.CallSession
 import com.example.data.repository.BondlyRepository
-import com.example.data.rtc.AgoraCallManager
-import com.example.data.rtc.RtcConnectionState
+import com.example.data.webrtc.CallConnectionState
+import com.example.data.webrtc.WebRtcCallManager
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
+import org.webrtc.SurfaceViewRenderer
 
 @Composable
 fun CallScreen(
@@ -53,7 +46,40 @@ fun CallScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val callManager = remember { AgoraCallManager(context) }
+
+    var handledAnswer by remember { mutableStateOf(false) }
+    var handledOffer by remember { mutableStateOf(false) }
+    val receivedCandidateIds = remember { mutableSetOf<String>() }
+
+    val callManager = remember(callId) {
+        WebRtcCallManager(
+            context = context,
+            onSendOffer = { sdp ->
+                coroutineScope.launch {
+                    repository.setCallOffer(callId, sdp)
+                }
+            },
+            onSendAnswer = { sdp ->
+                coroutineScope.launch {
+                    repository.setCallAnswer(callId, sdp)
+                }
+            },
+            onSendIceCandidate = { sdpMid, sdpMLineIndex, sdp ->
+                coroutineScope.launch {
+                    if (!isIncoming) {
+                        repository.addCallerCandidate(callId, sdpMid, sdpMLineIndex, sdp)
+                    } else {
+                        repository.addReceiverCandidate(callId, sdpMid, sdpMLineIndex, sdp)
+                    }
+                }
+            },
+            onCallEndedCallback = { _, duration ->
+                coroutineScope.launch {
+                    repository.updateCallStatus(callId, "ended", duration)
+                }
+            }
+        )
+    }
 
     val connectionState by callManager.connectionState.collectAsState()
     val isMicMuted by callManager.isMicMuted.collectAsState()
@@ -62,38 +88,97 @@ fun CallScreen(
     val isSpeakerOn by callManager.isSpeakerOn.collectAsState()
     val callDuration by callManager.callDurationSeconds.collectAsState()
 
-    // Observe call session in Firestore
-    var callSession by remember { mutableStateOf<CallSession?>(null) }
+    DisposableEffect(callId) {
+        onDispose {
+            callManager.release()
+        }
+    }
+
+    // Initialize WebRTC signaling lifecycle
     LaunchedEffect(callId) {
         if (callId.isNotEmpty()) {
-            if (!isIncoming) {
-                callManager.startOutgoingCall(callId, isVideo)
-            } else {
-                callManager.onCallAccepted(callId, isVideo)
-            }
+            callManager.initWebRtc(isVideo = isVideo, isCaller = !isIncoming)
 
-            repository.observeIncomingCalls().collect { session ->
-                if (session?.callId == callId) {
-                    callSession = session
-                    if (session.status == "rejected" || session.status == "ended") {
-                        callManager.endCall("Call finished")
-                        onCallFinished()
+            if (!isIncoming) {
+                // Caller generates offer
+                callManager.startOutgoingCall()
+
+                // Listen for receiver's answer and status updates
+                launch {
+                    repository.observeCallSession(callId).collect { session ->
+                        if (session != null) {
+                            if (!handledAnswer && session.answer != null) {
+                                val answerSdp = session.answer["sdp"]
+                                if (!answerSdp.isNullOrEmpty()) {
+                                    handledAnswer = true
+                                    callManager.onRemoteAnswerReceived(answerSdp)
+                                }
+                            }
+
+                            if (session.status == "rejected") {
+                                Toast.makeText(context, "$targetName declined the call", Toast.LENGTH_SHORT).show()
+                                callManager.endCall("Call declined")
+                                onCallFinished()
+                            } else if (session.status == "ended") {
+                                callManager.endCall("Call ended")
+                                onCallFinished()
+                            } else if (session.status == "busy") {
+                                Toast.makeText(context, "$targetName is currently busy", Toast.LENGTH_SHORT).show()
+                                callManager.endCall("User busy")
+                                onCallFinished()
+                            }
+                        }
+                    }
+                }
+
+                // Listen for receiver's ICE candidates
+                launch {
+                    repository.observeReceiverCandidates(callId).collect { candidates ->
+                        for (cand in candidates) {
+                            if (cand.id.isNotEmpty() && cand.id !in receivedCandidateIds) {
+                                receivedCandidateIds.add(cand.id)
+                                callManager.addRemoteIceCandidate(cand.sdpMid, cand.sdpMLineIndex, cand.sdp)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Receiver listens for offer
+                launch {
+                    repository.observeCallSession(callId).collect { session ->
+                        if (session != null) {
+                            if (!handledOffer && session.offer != null) {
+                                val offerSdp = session.offer["sdp"]
+                                if (!offerSdp.isNullOrEmpty()) {
+                                    handledOffer = true
+                                    callManager.answerIncomingCall(offerSdp)
+                                }
+                            }
+
+                            if (session.status == "ended") {
+                                callManager.endCall("Call ended")
+                                onCallFinished()
+                            }
+                        }
+                    }
+                }
+
+                // Listen for caller's ICE candidates
+                launch {
+                    repository.observeCallerCandidates(callId).collect { candidates ->
+                        for (cand in candidates) {
+                            if (cand.id.isNotEmpty() && cand.id !in receivedCandidateIds) {
+                                receivedCandidateIds.add(cand.id)
+                                callManager.addRemoteIceCandidate(cand.sdpMid, cand.sdpMLineIndex, cand.sdp)
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    // Auto-connect simulation for outgoing call
-    LaunchedEffect(Unit) {
-        if (!isIncoming) {
-            kotlinx.coroutines.delay(2500L)
-            callManager.onCallAccepted(callId, isVideo)
-            repository.updateCallStatus(callId, "active")
-        }
-    }
-
-    // Pulsing animation for audio calls
+    // Pulsing animation for audio calls and connecting state
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
@@ -117,30 +202,119 @@ fun CallScreen(
             .background(CharcoalDark)
     ) {
         if (isVideo) {
-            // VIDEO CALL VIEW
-            if (isCameraEnabled) {
-                // Live CameraX Feed
-                LocalCameraFeed(
-                    isFrontCamera = isFrontCamera,
+            // =========================================================================
+            // VIDEO CALL VIEW (REAL WEBRTC RENDERING)
+            // =========================================================================
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Remote Video Renderer (Full Screen)
+                AndroidView(
+                    factory = { ctx ->
+                        SurfaceViewRenderer(ctx).apply {
+                            callManager.setRemoteRenderer(this)
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
-            } else {
-                // Camera Off placeholder
+
+                // Placeholder if remote video not connected yet
+                if (connectionState !is CallConnectionState.Connected) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(CharcoalDark.copy(alpha = 0.9f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.size(140.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(130.dp)
+                                        .scale(pulseScale)
+                                        .clip(CircleShape)
+                                        .background(BondlyPink.copy(alpha = 0.2f))
+                                )
+                                AsyncImage(
+                                    model = targetPhoto.ifEmpty { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" },
+                                    contentDescription = targetName,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(100.dp)
+                                        .clip(CircleShape)
+                                        .border(2.dp, BondlyPink, CircleShape)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = targetName,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = TextWhite,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = when (connectionState) {
+                                    is CallConnectionState.OutgoingRinging -> "Ringing..."
+                                    is CallConnectionState.IncomingRinging -> "Incoming video call..."
+                                    is CallConnectionState.Connecting -> "Connecting WebRTC..."
+                                    is CallConnectionState.Failed -> "Connection failed"
+                                    else -> "Starting video call..."
+                                },
+                                color = if (connectionState is CallConnectionState.Failed) ErrorRed else TextLightGrey,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+
+                // Local Video Preview (Picture-in-Picture in Top-Right)
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(CharcoalDark),
-                    contentAlignment = Alignment.Center
+                        .align(Alignment.TopEnd)
+                        .padding(top = 90.dp, end = 20.dp)
+                        .size(width = 110.dp, height = 150.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(CharcoalCard)
+                        .border(2.dp, BondlyPink, RoundedCornerShape(16.dp))
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.VideocamOff,
-                            contentDescription = null,
-                            tint = TextMuted,
-                            modifier = Modifier.size(64.dp)
+                    if (isCameraEnabled) {
+                        AndroidView(
+                            factory = { ctx ->
+                                SurfaceViewRenderer(ctx).apply {
+                                    callManager.setLocalRenderer(this)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Camera is turned off", color = TextLightGrey)
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(CharcoalCard),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.VideocamOff,
+                                contentDescription = null,
+                                tint = TextMuted,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(topStart = 8.dp),
+                        color = Color.Black.copy(alpha = 0.6f),
+                        modifier = Modifier.align(Alignment.BottomEnd)
+                    ) {
+                        Text(
+                            text = "You",
+                            color = TextWhite,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
                     }
                 }
             }
@@ -152,95 +326,67 @@ fun CallScreen(
                     .height(160.dp)
                     .background(
                         Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                            colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
                         )
                     )
                     .padding(20.dp)
             ) {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = targetName,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = TextWhite,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                modifier = Modifier.size(8.dp),
+                                shape = CircleShape,
+                                color = if (connectionState is CallConnectionState.Connected) OnlineGreen else WarningOrange
+                            ) {}
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = targetName,
-                                style = MaterialTheme.typography.titleLarge,
-                                color = TextWhite,
-                                fontWeight = FontWeight.Bold
+                                text = when (connectionState) {
+                                    is CallConnectionState.Connected -> "Live • ${formatDuration(callDuration)}"
+                                    is CallConnectionState.OutgoingRinging -> "Ringing..."
+                                    is CallConnectionState.IncomingRinging -> "Incoming call..."
+                                    is CallConnectionState.Connecting -> "Connecting WebRTC..."
+                                    is CallConnectionState.Failed -> "Connection Failed"
+                                    else -> "Connecting..."
+                                },
+                                color = TextLightGrey,
+                                fontSize = 13.sp
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    modifier = Modifier.size(8.dp),
-                                    shape = CircleShape,
-                                    color = if (connectionState is RtcConnectionState.Connected) OnlineGreen else WarningOrange
-                                ) {}
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = when (connectionState) {
-                                        is RtcConnectionState.Connected -> "Live • ${formatDuration(callDuration)}"
-                                        is RtcConnectionState.OutgoingRinging -> "Ringing..."
-                                        is RtcConnectionState.IncomingRinging -> "Incoming call..."
-                                        else -> "Connecting..."
-                                    },
-                                    color = TextLightGrey,
-                                    fontSize = 13.sp
-                                )
-                            }
                         }
+                    }
 
-                        // Bondly Encrypted Badge
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = CharcoalCard.copy(alpha = 0.8f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                    // Native WebRTC P2P Badge
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = CharcoalCard.copy(alpha = 0.85f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Lock, contentDescription = null, tint = BondlyPink, modifier = Modifier.size(12.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Agora HD", color = TextWhite, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            }
+                            Icon(Icons.Default.Security, contentDescription = null, tint = BondlyPink, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("WebRTC P2P", color = TextWhite, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             }
-
-            // Remote Picture-in-Picture Preview (Simulated / Connected)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 90.dp, end = 20.dp)
-                    .size(width = 110.dp, height = 150.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(CharcoalCard)
-                    .border(2.dp, BondlyPink, RoundedCornerShape(16.dp))
-            ) {
-                AsyncImage(
-                    model = targetPhoto.ifEmpty { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" },
-                    contentDescription = targetName,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Surface(
-                    shape = RoundedCornerShape(topStart = 8.dp),
-                    color = Color.Black.copy(alpha = 0.6f),
-                    modifier = Modifier.align(Alignment.BottomEnd)
-                ) {
-                    Text(
-                        text = targetName.take(6),
-                        color = TextWhite,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                }
-            }
         } else {
-            // VOICE CALL VIEW
+            // =========================================================================
+            // VOICE CALL VIEW (NATIVE WEBRTC AUDIO)
+            // =========================================================================
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -289,32 +435,82 @@ fun CallScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = when (connectionState) {
-                        is RtcConnectionState.Connected -> "Connected • ${formatDuration(callDuration)}"
-                        is RtcConnectionState.OutgoingRinging -> "Ringing..."
-                        is RtcConnectionState.IncomingRinging -> "Incoming call..."
+                        is CallConnectionState.Connected -> "Connected • ${formatDuration(callDuration)}"
+                        is CallConnectionState.OutgoingRinging -> "Ringing..."
+                        is CallConnectionState.IncomingRinging -> "Incoming call..."
+                        is CallConnectionState.Connecting -> "Connecting WebRTC audio..."
+                        is CallConnectionState.Failed -> "Connection failed"
                         else -> "Connecting..."
                     },
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (connectionState is RtcConnectionState.Connected) OnlineGreen else TextLightGrey
+                    color = if (connectionState is CallConnectionState.Connected) OnlineGreen else if (connectionState is CallConnectionState.Failed) ErrorRed else TextLightGrey
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "🔒 Bondly End-to-End Encrypted Voice Call",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
-                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = CharcoalCardElevated,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = BondlyPink, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Native WebRTC Peer-to-Peer Audio",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextLightGrey
+                        )
+                    }
+                }
             }
         }
 
+        // Connection failure notice if STUN is blocked on the network
+        if (connectionState is CallConnectionState.Failed) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(32.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = CharcoalCard,
+                border = androidx.compose.foundation.BorderStroke(1.dp, ErrorRed)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.SignalWifiBad, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(36.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Connection Failed",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = (connectionState as CallConnectionState.Failed).message + "\n\nDirect STUN peer-to-peer NAT traversal failed. Both devices must be on network environments permitting UDP P2P traffic.",
+                        color = TextLightGrey,
+                        fontSize = 12.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
+
+        // =========================================================================
         // BOTTOM CONTROLS BAR (For both Voice and Video)
+        // =========================================================================
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)),
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f)),
                         startY = 0f
                     )
                 )
@@ -365,8 +561,9 @@ fun CallScreen(
                 IconButton(
                     onClick = {
                         coroutineScope.launch {
-                            callManager.endCall()
-                            repository.updateCallStatus(callId, "ended")
+                            val duration = callDuration
+                            callManager.endCall("Call ended by user")
+                            repository.updateCallStatus(callId, "ended", duration)
                             onCallFinished()
                         }
                     },
@@ -410,86 +607,4 @@ fun CallControlButton(
             modifier = Modifier.size(24.dp)
         )
     }
-}
-
-@Composable
-fun LocalCameraFeed(
-    isFrontCamera: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    AndroidView(
-        factory = { ctx ->
-            val previewView = PreviewView(ctx).apply {
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            }
-
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-            cameraProviderFuture.addListener({
-                try {
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-
-                    val cameraSelector = if (isFrontCamera) {
-                        CameraSelector.DEFAULT_FRONT_CAMERA
-                    } else {
-                        CameraSelector.DEFAULT_BACK_CAMERA
-                    }
-
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview
-                    )
-                } catch (_: Exception) {
-                    // Fallback to back camera if front camera is unavailable
-                    try {
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-                        cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            CameraSelector.DEFAULT_BACK_CAMERA,
-                            preview
-                        )
-                    } catch (_: Exception) {}
-                }
-            }, ContextCompat.getMainExecutor(ctx))
-
-            previewView
-        },
-        update = { previewView ->
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-            cameraProviderFuture.addListener({
-                try {
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-
-                    val cameraSelector = if (isFrontCamera) {
-                        CameraSelector.DEFAULT_FRONT_CAMERA
-                    } else {
-                        CameraSelector.DEFAULT_BACK_CAMERA
-                    }
-
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview
-                    )
-                } catch (_: Exception) {}
-            }, ContextCompat.getMainExecutor(context))
-        },
-        modifier = modifier
-    )
 }

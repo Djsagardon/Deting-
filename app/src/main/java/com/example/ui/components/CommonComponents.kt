@@ -407,32 +407,68 @@ fun IncomingCallDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .scale(pulseScale)
-                        .clip(CircleShape)
-                        .background(BondlyPink.copy(alpha = 0.2f)),
+                    modifier = Modifier.size(110.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (call.callType == "video") Icons.Filled.Videocam else Icons.Filled.Call,
-                        contentDescription = null,
-                        tint = BondlyPink,
-                        modifier = Modifier.size(40.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(105.dp)
+                            .scale(pulseScale)
+                            .clip(CircleShape)
+                            .background(BondlyPink.copy(alpha = 0.25f))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(88.dp)
+                            .clip(CircleShape)
+                            .background(BondlyPurple.copy(alpha = 0.35f))
+                    )
+                    coil.compose.AsyncImage(
+                        model = call.callerPhotoUrl.ifEmpty { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" },
+                        contentDescription = call.callerName,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .border(2.dp, BondlyPink, CircleShape)
+                    )
+                    // Call type indicator badge on corner
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(28.dp),
+                        shape = CircleShape,
+                        color = BondlyPink,
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, CharcoalDark)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (call.callType == "video") Icons.Filled.Videocam else Icons.Filled.Call,
+                                contentDescription = null,
+                                tint = TextWhite,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = CharcoalCardElevated,
+                    border = androidx.compose.foundation.BorderStroke(0.5.dp, CharcoalBorder)
+                ) {
+                    Text(
+                        text = if (call.callType == "video") "Incoming Video Call • Bondly P2P" else "Incoming Voice Call • Bondly P2P",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = BondlyPink,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Text(
-                    text = if (call.callType == "video") "Incoming Video Call" else "Incoming Voice Call",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = BondlyPink,
-                    letterSpacing = 1.sp
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
                     text = call.callerName,
@@ -441,7 +477,7 @@ fun IncomingCallDialog(
                     color = TextWhite
                 )
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),

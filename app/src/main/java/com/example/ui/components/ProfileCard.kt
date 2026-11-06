@@ -32,6 +32,7 @@ fun ProfileCard(
     onPass: () -> Unit,
     onSuperLike: () -> Unit,
     onViewDetails: () -> Unit,
+    isProcessing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var photoIndex by remember(profile.userId) { mutableIntStateOf(0) }
@@ -252,16 +253,25 @@ fun ProfileCard(
                         Icon(Icons.Default.Info, contentDescription = "Profile Details", tint = BondlyGold, modifier = Modifier.size(22.dp))
                     }
 
-                    // Like Button (Gradient)
+                    // Like / Match Button (Gradient)
                     IconButton(
-                        onClick = onLike,
+                        onClick = { if (!isProcessing) onLike() },
+                        enabled = !isProcessing,
                         modifier = Modifier
                             .size(56.dp)
                             .clip(CircleShape)
                             .background(BondlyGradient)
                             .testTag("like_button")
                     ) {
-                        Icon(Icons.Default.Favorite, contentDescription = "Like", tint = TextWhite, modifier = Modifier.size(28.dp))
+                        if (isProcessing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = TextWhite,
+                                strokeWidth = 2.5.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Favorite, contentDescription = "Match", tint = TextWhite, modifier = Modifier.size(28.dp))
+                        }
                     }
                 }
             }

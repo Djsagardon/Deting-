@@ -109,6 +109,12 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
 
+    // Native WebRTC SDK
+    implementation(libs.webrtc.sdk)
+
+    // HTTP Client for Secure Backend Uploader
+    implementation(libs.okhttp)
+
     // Testing
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

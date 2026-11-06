@@ -11,6 +11,7 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -124,6 +125,82 @@ class BondlyRepository(
     // 2. DISCOVERY & 48-HOUR HIDE RULE
     // =========================================================================
 
+    suspend fun getExcludedUserIds(myUid: String): Set<String> {
+        val excluded = mutableSetOf<String>()
+        val now = Timestamp.now()
+
+        // 1. Rejections (48 hour hide)
+        try {
+            val rejSnap = firestore.collection("rejections")
+                .whereEqualTo("rejectorUid", myUid)
+                .get().await()
+            for (doc in rejSnap.documents) {
+                val rej = doc.toObject(Rejection::class.java)
+                if (rej != null && rej.expiresAt != null && rej.expiresAt.seconds > now.seconds) {
+                    excluded.add(rej.rejectedUid)
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 2. Blocks
+        try {
+            val blockSnap = firestore.collection("blocks")
+                .whereEqualTo("blockerUid", myUid)
+                .get().await()
+            for (doc in blockSnap.documents) {
+                doc.getString("blockedUid")?.let { excluded.add(it) }
+            }
+        } catch (_: Exception) {}
+
+        // 3. Confirmed Matches
+        try {
+            val matchSnap = firestore.collection("matches")
+                .whereArrayContains("users", myUid)
+                .get().await()
+            for (doc in matchSnap.documents) {
+                val m = doc.toObject(Match::class.java)
+                if (m != null) {
+                    if (m.user1Id == myUid) excluded.add(m.user2Id) else excluded.add(m.user1Id)
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 4. Match Requests sent by me (pending, accepted, rejected)
+        try {
+            val sentReqSnap = firestore.collection("match_requests")
+                .whereEqualTo("senderId", myUid)
+                .get().await()
+            for (doc in sentReqSnap.documents) {
+                doc.getString("receiverId")?.let { excluded.add(it) }
+            }
+        } catch (_: Exception) {}
+
+        // 5. Match Requests received by me (pending or accepted)
+        try {
+            val recReqSnap = firestore.collection("match_requests")
+                .whereEqualTo("receiverId", myUid)
+                .get().await()
+            for (doc in recReqSnap.documents) {
+                val status = doc.getString("status")
+                if (status == "pending" || status == "accepted") {
+                    doc.getString("senderId")?.let { excluded.add(it) }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 6. Likes sent by me
+        try {
+            val likeSnap = firestore.collection("likes")
+                .whereEqualTo("fromUserId", myUid)
+                .get().await()
+            for (doc in likeSnap.documents) {
+                doc.getString("toUserId")?.let { excluded.add(it) }
+            }
+        } catch (_: Exception) {}
+
+        return excluded
+    }
+
     fun observeDiscoveryUsers(myGender: String, myPreference: String): Flow<List<UserProfile>> = callbackFlow {
         val myUid = currentUid
         if (myUid.isEmpty()) {
@@ -161,60 +238,11 @@ class BondlyRepository(
                     allCandidates
                 }
 
-                // Check active 48-hour rejections, blocks, and mutual matches asynchronously
-                firestore.collection("rejections")
-                    .whereEqualTo("rejectorUid", myUid)
-                    .get()
-                    .addOnSuccessListener { rejSnap ->
-                        val now = Timestamp.now()
-                        val activeRejectedUids = rejSnap.documents.mapNotNull { doc ->
-                            val rej = doc.toObject(Rejection::class.java)
-                            if (rej != null && rej.expiresAt != null && rej.expiresAt.seconds > now.seconds) {
-                                rej.rejectedUid
-                            } else null
-                        }.toSet()
-
-                        firestore.collection("blocks")
-                            .whereEqualTo("blockerUid", myUid)
-                            .get()
-                            .addOnSuccessListener { blockSnap ->
-                                val blockedUids = blockSnap.documents.mapNotNull {
-                                    it.getString("blockedUid")
-                                }.toSet()
-
-                                firestore.collection("matches")
-                                    .whereArrayContains("users", myUid)
-                                    .get()
-                                    .addOnSuccessListener { matchSnap ->
-                                        val matchedUids = matchSnap.documents.mapNotNull { doc ->
-                                            val m = doc.toObject(Match::class.java)
-                                            if (m != null) {
-                                                if (m.user1Id == myUid) m.user2Id else m.user1Id
-                                            } else null
-                                        }.toSet()
-
-                                        val eligible = genderFiltered.filter { c ->
-                                            c.userId !in activeRejectedUids &&
-                                            c.userId !in blockedUids &&
-                                            c.userId !in matchedUids
-                                        }
-                                        trySend(eligible)
-                                    }
-                                    .addOnFailureListener {
-                                        val eligible = genderFiltered.filter { c ->
-                                            c.userId !in activeRejectedUids && c.userId !in blockedUids
-                                        }
-                                        trySend(eligible)
-                                    }
-                            }
-                            .addOnFailureListener {
-                                val eligible = genderFiltered.filter { c -> c.userId !in activeRejectedUids }
-                                trySend(eligible)
-                            }
-                    }
-                    .addOnFailureListener {
-                        trySend(genderFiltered)
-                    }
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    val excluded = getExcludedUserIds(myUid)
+                    val eligible = genderFiltered.filter { it.userId !in excluded }
+                    trySend(eligible)
+                }
             }
         awaitClose { reg.remove() }
     }
@@ -269,9 +297,27 @@ class BondlyRepository(
         return try {
             val myUid = currentUid
             if (myUid.isEmpty()) return Result.failure(Exception("Not logged in"))
+            if (targetUid == myUid) return Result.failure(Exception("Cannot match with yourself"))
 
             val myProfile = getProfile(myUid) ?: return Result.failure(Exception("My profile not found"))
             val targetProfile = getProfile(targetUid) ?: return Result.failure(Exception("Target profile not found"))
+
+            // Check if already matched
+            val matchId = if (myUid < targetUid) "${myUid}_$targetUid" else "${targetUid}_$myUid"
+            val existingMatchSnap = firestore.collection("matches").document(matchId).get().await()
+            if (existingMatchSnap.exists()) {
+                return Result.failure(Exception("You are already matched with ${targetProfile.displayName}"))
+            }
+
+            // Check if request already pending from myUid
+            val reqId = "${myUid}_$targetUid"
+            val existingReqSnap = firestore.collection("match_requests").document(reqId).get().await()
+            if (existingReqSnap.exists()) {
+                val status = existingReqSnap.getString("status")
+                if (status == "pending") {
+                    return Result.failure(Exception("Match request is already pending for ${targetProfile.displayName}"))
+                }
+            }
 
             // Check if target has an existing pending request or like for me
             val reverseReqId = "${targetUid}_$myUid"
@@ -283,7 +329,6 @@ class BondlyRepository(
 
             if (isMutual) {
                 // CONFIRMED MUTUAL MATCH
-                val matchId = if (myUid < targetUid) "${myUid}_$targetUid" else "${targetUid}_$myUid"
                 val match = Match(
                     id = matchId,
                     user1Id = myUid,
@@ -304,6 +349,20 @@ class BondlyRepository(
                 firestore.collection("match_requests").document(reverseReqId).update(
                     mapOf("status" to "accepted", "updatedAt" to Timestamp.now())
                 )
+                val matchRequest = MatchRequest(
+                    id = reqId,
+                    senderId = myUid,
+                    receiverId = targetUid,
+                    senderName = myProfile.displayName,
+                    senderPhotoUrl = myProfile.profilePhotoUrls.firstOrNull() ?: "",
+                    senderAge = myProfile.age,
+                    senderCity = myProfile.city,
+                    senderBio = myProfile.bio,
+                    status = "accepted",
+                    createdAt = Timestamp.now(),
+                    updatedAt = Timestamp.now()
+                )
+                firestore.collection("match_requests").document(reqId).set(matchRequest).await()
 
                 // Send mutual match notification to both
                 createNotification(
@@ -327,8 +386,7 @@ class BondlyRepository(
 
                 Result.success(true)
             } else {
-                // Step 2: Save match/interest request with full sender info
-                val reqId = "${myUid}_$targetUid"
+                // Save match/interest request with full sender info
                 val matchRequest = MatchRequest(
                     id = reqId,
                     senderId = myUid,
@@ -354,7 +412,7 @@ class BondlyRepository(
                 )
                 firestore.collection("likes").document(reqId).set(like).await()
 
-                // Step 3: Send push notification to target user showing who initiated the match
+                // Send push notification to target user showing who initiated the match
                 createNotification(
                     targetUid = targetUid,
                     title = "Someone wants to match with you!",
@@ -403,6 +461,14 @@ class BondlyRepository(
                 mapOf("status" to "accepted", "updatedAt" to Timestamp.now())
             )
 
+            // Also update reverse request if present
+            val reverseReqId = "${myUid}_$senderUid"
+            try {
+                firestore.collection("match_requests").document(reverseReqId).update(
+                    mapOf("status" to "accepted", "updatedAt" to Timestamp.now())
+                )
+            } catch (_: Exception) {}
+
             // Notify sender
             createNotification(
                 targetUid = senderUid,
@@ -418,6 +484,24 @@ class BondlyRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    fun observeMatchRequest(senderUid: String, receiverUid: String): Flow<MatchRequest?> = callbackFlow {
+        val reqId = "${senderUid}_$receiverUid"
+        val reg = firestore.collection("match_requests").document(reqId)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.toObject(MatchRequest::class.java))
+            }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeMatchBetween(user1Id: String, user2Id: String): Flow<Match?> = callbackFlow {
+        val matchId = if (user1Id < user2Id) "${user1Id}_$user2Id" else "${user2Id}_$user1Id"
+        val reg = firestore.collection("matches").document(matchId)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.toObject(Match::class.java))
+            }
+        awaitClose { reg.remove() }
     }
 
     // =========================================================================
@@ -667,21 +751,87 @@ class BondlyRepository(
     }
 
     // =========================================================================
-    // 7. CALL SESSIONS (AGORA RTC)
+    // 7. WEBRTC CALL SESSIONS & SIGNALING
     // =========================================================================
+
+    suspend fun isMutuallyMatched(targetUid: String): Boolean {
+        val myUid = currentUid
+        if (myUid.isEmpty() || targetUid.isEmpty()) return false
+        val myProfile = getProfile(myUid)
+        if (myProfile?.isAdmin == true) return true // Admins bypass restrictions
+
+        return try {
+            val q1 = firestore.collection("matches")
+                .whereEqualTo("user1Id", myUid)
+                .whereEqualTo("user2Id", targetUid)
+                .limit(1)
+                .get()
+                .await()
+            if (!q1.isEmpty) return true
+
+            val q2 = firestore.collection("matches")
+                .whereEqualTo("user1Id", targetUid)
+                .whereEqualTo("user2Id", myUid)
+                .limit(1)
+                .get()
+                .await()
+            !q2.isEmpty
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun isUserBusy(uid: String): Boolean {
+        return try {
+            val ringingAsReceiver = firestore.collection("calls")
+                .whereEqualTo("receiverUid", uid)
+                .whereEqualTo("status", "ringing")
+                .limit(1).get().await()
+            if (!ringingAsReceiver.isEmpty) return true
+
+            val activeAsCaller = firestore.collection("calls")
+                .whereEqualTo("callerUid", uid)
+                .whereIn("status", listOf("active", "accepted"))
+                .limit(1).get().await()
+            if (!activeAsCaller.isEmpty) return true
+
+            val activeAsReceiver = firestore.collection("calls")
+                .whereEqualTo("receiverUid", uid)
+                .whereIn("status", listOf("active", "accepted"))
+                .limit(1).get().await()
+            !activeAsReceiver.isEmpty
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     suspend fun initiateCall(targetUid: String, isVideo: Boolean): Result<CallSession> {
         return try {
-            val myProfile = getProfile(currentUid)
+            val myUid = currentUid
+            if (myUid.isEmpty()) return Result.failure(Exception("Not logged in"))
+            if (myUid == targetUid) return Result.failure(Exception("Cannot call yourself"))
+
+            // Verify mutual match unless admin
+            if (!isMutuallyMatched(targetUid)) {
+                return Result.failure(Exception("Calling is only available for mutually confirmed matches"))
+            }
+
+            // Check if receiver is currently on another call
+            if (isUserBusy(targetUid)) {
+                return Result.failure(Exception("User is currently on another call or unavailable"))
+            }
+
+            val myProfile = getProfile(myUid)
             val targetProfile = getProfile(targetUid)
             val docRef = firestore.collection("calls").document()
             val session = CallSession(
                 callId = docRef.id,
-                callerUid = currentUid,
+                callerUid = myUid,
                 receiverUid = targetUid,
                 callerName = myProfile?.displayName ?: "Caller",
                 callerPhotoUrl = myProfile?.profilePhotoUrls?.firstOrNull() ?: "",
                 receiverName = targetProfile?.displayName ?: "Receiver",
+                receiverPhotoUrl = targetProfile?.profilePhotoUrls?.firstOrNull() ?: "",
                 channelName = "bondly_${docRef.id}",
                 callType = if (isVideo) "video" else "voice",
                 status = "ringing",
@@ -689,7 +839,7 @@ class BondlyRepository(
             )
             docRef.set(session).await()
 
-            // Also create incoming call notification for receiver
+            // Create notification for receiver
             createNotification(
                 targetUid = targetUid,
                 title = if (isVideo) "Incoming Video Call" else "Incoming Voice Call",
@@ -723,18 +873,136 @@ class BondlyRepository(
         awaitClose { reg.remove() }
     }
 
-    suspend fun updateCallStatus(callId: String, status: String): Result<Unit> {
+    suspend fun updateCallStatus(callId: String, status: String, durationSeconds: Int = 0): Result<Unit> {
         return try {
+            val updates = mutableMapOf<String, Any>(
+                "status" to status
+            )
+            if (status in listOf("active", "accepted")) {
+                updates["acceptedAt"] = Timestamp.now()
+            }
+            if (status in listOf("ended", "rejected", "missed", "busy", "timeout", "failed")) {
+                updates["endedAt"] = Timestamp.now()
+                if (durationSeconds > 0) {
+                    updates["durationSeconds"] = durationSeconds
+                }
+            }
+            firestore.collection("calls").document(callId).update(updates).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setCallOffer(callId: String, sdp: String): Result<Unit> {
+        return try {
+            val offerMap = mapOf(
+                "type" to "offer",
+                "sdp" to sdp
+            )
+            firestore.collection("calls").document(callId).update("offer", offerMap).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setCallAnswer(callId: String, sdp: String): Result<Unit> {
+        return try {
+            val answerMap = mapOf(
+                "type" to "answer",
+                "sdp" to sdp
+            )
             firestore.collection("calls").document(callId).update(
                 mapOf(
-                    "status" to status,
-                    "endedAt" to if (status in listOf("ended", "rejected", "missed")) Timestamp.now() else null
+                    "answer" to answerMap,
+                    "status" to "accepted",
+                    "acceptedAt" to Timestamp.now()
                 )
             ).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun addCallerCandidate(callId: String, sdpMid: String, sdpMLineIndex: Int, sdp: String, serverUrl: String = ""): Result<Unit> {
+        return try {
+            val docRef = firestore.collection("calls").document(callId).collection("callerCandidates").document()
+            val candidate = IceCandidateModel(
+                id = docRef.id,
+                sdpMid = sdpMid,
+                sdpMLineIndex = sdpMLineIndex,
+                sdp = sdp,
+                serverUrl = serverUrl,
+                createdAt = Timestamp.now()
+            )
+            docRef.set(candidate).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addReceiverCandidate(callId: String, sdpMid: String, sdpMLineIndex: Int, sdp: String, serverUrl: String = ""): Result<Unit> {
+        return try {
+            val docRef = firestore.collection("calls").document(callId).collection("receiverCandidates").document()
+            val candidate = IceCandidateModel(
+                id = docRef.id,
+                sdpMid = sdpMid,
+                sdpMLineIndex = sdpMLineIndex,
+                sdp = sdp,
+                serverUrl = serverUrl,
+                createdAt = Timestamp.now()
+            )
+            docRef.set(candidate).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun observeCallerCandidates(callId: String): Flow<List<IceCandidateModel>> = callbackFlow {
+        if (callId.isEmpty()) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+        val reg = firestore.collection("calls").document(callId)
+            .collection("callerCandidates")
+            .addSnapshotListener { snapshot, _ ->
+                val list = snapshot?.documents?.mapNotNull { it.toObject(IceCandidateModel::class.java) } ?: emptyList()
+                trySend(list)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeReceiverCandidates(callId: String): Flow<List<IceCandidateModel>> = callbackFlow {
+        if (callId.isEmpty()) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+        val reg = firestore.collection("calls").document(callId)
+            .collection("receiverCandidates")
+            .addSnapshotListener { snapshot, _ ->
+                val list = snapshot?.documents?.mapNotNull { it.toObject(IceCandidateModel::class.java) } ?: emptyList()
+                trySend(list)
+            }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeCallSession(callId: String): Flow<CallSession?> = callbackFlow {
+        if (callId.isEmpty()) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
+        val reg = firestore.collection("calls").document(callId)
+            .addSnapshotListener { snapshot, _ ->
+                trySend(snapshot?.toObject(CallSession::class.java))
+            }
+        awaitClose { reg.remove() }
     }
 
     fun observeCallHistory(): Flow<List<CallSession>> = callbackFlow {
@@ -807,16 +1075,31 @@ class BondlyRepository(
         }
     }
 
-    suspend fun reportUser(targetUid: String, reason: String, details: String): Result<Unit> {
+    suspend fun reportUser(
+        targetUid: String,
+        reason: String,
+        details: String,
+        reasons: List<String> = emptyList(),
+        reportedName: String = "",
+        reportedPhotoUrl: String = "",
+        reportedPublicId: String = ""
+    ): Result<Unit> {
         return try {
             val docRef = firestore.collection("reports").document()
+            val allReasons = reasons.ifEmpty { listOf(reason) }
             val report = Report(
                 id = docRef.id,
                 reporterUid = currentUid,
                 reportedUid = targetUid,
-                reason = reason,
+                reportedName = reportedName,
+                reportedPhotoUrl = reportedPhotoUrl,
+                reportedPublicId = reportedPublicId,
+                reason = allReasons.joinToString(", "),
+                reasons = allReasons,
                 details = details,
-                createdAt = Timestamp.now()
+                status = "pending",
+                createdAt = Timestamp.now(),
+                updatedAt = Timestamp.now()
             )
             docRef.set(report).await()
             Result.success(Unit)
@@ -825,8 +1108,46 @@ class BondlyRepository(
         }
     }
 
+    suspend fun submitReport(
+        reportedUid: String,
+        reportedName: String,
+        reasons: List<String>,
+        details: String,
+        reportedPhotoUrl: String = "",
+        reportedPublicId: String = ""
+    ): Result<Unit> = reportUser(
+        targetUid = reportedUid,
+        reason = reasons.joinToString(", "),
+        details = details,
+        reasons = reasons,
+        reportedName = reportedName,
+        reportedPhotoUrl = reportedPhotoUrl,
+        reportedPublicId = reportedPublicId
+    )
+
     suspend fun submitReport(reportedUid: String, reportedName: String, reason: String, details: String): Result<Unit> =
-        reportUser(reportedUid, reason, details)
+        reportUser(reportedUid, reason, details, listOf(reason), reportedName)
+
+    suspend fun updateReportStatus(reportId: String, newStatus: String, notes: String = ""): Result<Unit> {
+        return try {
+            if (!checkIsAdmin()) return Result.failure(Exception("Admin access required"))
+            firestore.collection("reports").document(reportId).update(
+                mapOf(
+                    "status" to newStatus,
+                    "adminNotes" to notes,
+                    "updatedAt" to Timestamp.now()
+                )
+            ).await()
+            recordAdminAudit(
+                action = "REPORT_${newStatus.uppercase()}",
+                targetUserId = reportId,
+                details = "Report status set to $newStatus. Notes: $notes"
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     suspend fun deleteAccount(): Result<Unit> {
         return try {

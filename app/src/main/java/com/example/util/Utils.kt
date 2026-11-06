@@ -29,7 +29,10 @@ object ContactSharingFilter {
         val reason: String = ""
     )
 
-    fun checkMessage(text: String, userLevel: Int): CheckResult {
+    fun checkMessage(text: String, userLevel: Int, isAdmin: Boolean = false): CheckResult {
+        if (isAdmin) {
+            return CheckResult(false)
+        }
         if (userLevel < 2) {
             if (PHONE_PATTERN.matcher(text).find()) {
                 return CheckResult(true, "Sharing mobile numbers is unlocked at Level 2. Keep conversations on Bondly for your safety!")
@@ -67,6 +70,15 @@ object UserLevelManager {
     )
 
     fun calculateProgression(profile: UserProfile): ProgressionStatus {
+        if (profile.isAdmin) {
+            return ProgressionStatus(
+                currentLevel = 5,
+                currentLevelName = "Level 5 · Bondly Exclusive Account",
+                overallProgressFraction = 1f,
+                isVoiceCallAllowed = true,
+                isVideoCallAllowed = true
+            )
+        }
         val level = calculateLevel(profile)
         val levelName = when (level) {
             1 -> "Level 1 · New Member"
@@ -86,6 +98,7 @@ object UserLevelManager {
     }
 
     fun calculateLevel(profile: UserProfile): Int {
+        if (profile.isAdmin) return 5
         val days = profile.activeDaysCount
         return when {
             days >= 30 && profile.profileCompleted -> 5

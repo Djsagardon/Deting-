@@ -151,7 +151,7 @@ private fun AuthenticatedAppContent(
             coroutineScope.launch {
                 val result = repository.initiateCall(targetUid, isVideo)
                 result.onSuccess { session ->
-                    navigateTo(Screen.Call(session.callId, targetUid, targetName, isVideo, false))
+                    navigateTo(Screen.Call(session.callId, targetUid, targetName, isVideo, false, targetPhoto = session.receiverPhotoUrl))
                 }.onFailure {
                     Toast.makeText(context, "Could not start call: ${it.localizedMessage}", Toast.LENGTH_SHORT).show()
                 }
@@ -220,7 +220,8 @@ private fun AuthenticatedAppContent(
                             targetUid = call.callerUid,
                             targetName = call.callerName,
                             isVideo = call.callType == "video",
-                            isIncoming = true
+                            isIncoming = true,
+                            targetPhoto = call.callerPhotoUrl
                         )
                     )
                 }
@@ -519,6 +520,7 @@ private fun AuthenticatedAppContent(
                         callId = screen.callId,
                         targetUid = screen.targetUid,
                         targetName = screen.targetName,
+                        targetPhoto = screen.targetPhoto,
                         isVideo = screen.isVideo,
                         isIncoming = screen.isIncoming,
                         repository = repository,

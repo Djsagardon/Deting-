@@ -19,6 +19,7 @@ sealed class Screen {
         val targetUid: String,
         val targetName: String,
         val isVideo: Boolean,
-        val isIncoming: Boolean
+        val isIncoming: Boolean,
+        val targetPhoto: String = ""
     ) : Screen()
 }

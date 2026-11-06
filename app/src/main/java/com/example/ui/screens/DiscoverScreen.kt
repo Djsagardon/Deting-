@@ -141,6 +141,7 @@ fun DiscoverScreen(
                     )
                 }
             } else {
+                val context = androidx.compose.ui.platform.LocalContext.current
                 val currentCandidate = candidates[currentIndex]
 
                 Box(
@@ -151,19 +152,34 @@ fun DiscoverScreen(
                 ) {
                     ProfileCard(
                         profile = currentCandidate,
+                        isProcessing = isSwiping,
                         onLike = {
                             if (!isSwiping) {
                                 isSwiping = true
                                 coroutineScope.launch {
-                                    val matchResult = repository.sendLike(currentCandidate.userId).getOrDefault(false)
-                                    excludedIds = excludedIds + currentCandidate.userId
-                                    if (matchResult) {
-                                        matchedUser = currentCandidate
-                                    }
-                                    if (currentIndex < candidates.size - 1) {
-                                        currentIndex++
-                                    } else {
-                                        currentIndex = 0
+                                    val result = repository.sendLike(currentCandidate.userId)
+                                    result.onSuccess { isMutual ->
+                                        excludedIds = excludedIds + currentCandidate.userId
+                                        if (isMutual) {
+                                            matchedUser = currentCandidate
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Match request sent to ${currentCandidate.displayName}! 💖",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        if (currentIndex < candidates.size - 1) {
+                                            currentIndex++
+                                        } else {
+                                            currentIndex = 0
+                                        }
+                                    }.onFailure { err ->
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            err.localizedMessage ?: "Could not send match request",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                     isSwiping = false
                                 }
@@ -189,15 +205,29 @@ fun DiscoverScreen(
                             if (!isSwiping) {
                                 isSwiping = true
                                 coroutineScope.launch {
-                                    val matchResult = repository.sendLike(currentCandidate.userId).getOrDefault(false)
-                                    excludedIds = excludedIds + currentCandidate.userId
-                                    if (matchResult) {
-                                        matchedUser = currentCandidate
-                                    }
-                                    if (currentIndex < candidates.size - 1) {
-                                        currentIndex++
-                                    } else {
-                                        currentIndex = 0
+                                    val result = repository.sendLike(currentCandidate.userId, type = "superlike")
+                                    result.onSuccess { isMutual ->
+                                        excludedIds = excludedIds + currentCandidate.userId
+                                        if (isMutual) {
+                                            matchedUser = currentCandidate
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Super Like sent to ${currentCandidate.displayName}! ⭐",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        if (currentIndex < candidates.size - 1) {
+                                            currentIndex++
+                                        } else {
+                                            currentIndex = 0
+                                        }
+                                    }.onFailure { err ->
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            err.localizedMessage ?: "Could not send super like",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                     isSwiping = false
                                 }

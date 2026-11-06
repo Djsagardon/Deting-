@@ -195,12 +195,30 @@ fun AdminDashboardScreen(
                 4 -> AdminReportsAndAuditTab(
                     reports = allReports,
                     auditLogs = allLogs,
+                    onViewUserProfile = onViewUserProfile,
+                    onUpdateReportStatus = { reportId, status, notes ->
+                        coroutineScope.launch {
+                            repository.updateReportStatus(reportId, status, notes)
+                            Toast.makeText(context, "Report status: $status", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onSuspendReportedUser = { targetUid, reportId ->
+                        coroutineScope.launch {
+                            repository.updateAccountStatusByAdmin(targetUid, "suspended", "Suspended via report $reportId")
+                            repository.updateReportStatus(reportId, "resolved", "User suspended")
+                            Toast.makeText(context, "User suspended & report resolved", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onDismissReport = { reportId ->
-                        coroutineScope.launch { repository.dismissReport(reportId) }
+                        coroutineScope.launch {
+                            repository.updateReportStatus(reportId, "dismissed", "Dismissed by admin")
+                            Toast.makeText(context, "Report dismissed", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     onBanReportedUser = { targetUid, reportId ->
                         coroutineScope.launch {
                             repository.banUser(targetUid, reportId)
+                            repository.updateReportStatus(reportId, "resolved", "User banned")
                             Toast.makeText(context, "User banned and report resolved", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -827,56 +845,276 @@ private fun AdminTimeAnalyticsTab(
 // =============================================================================
 // SUB-TAB 4: REPORTS & AUDIT LOGS
 // =============================================================================
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AdminReportsAndAuditTab(
     reports: List<Report>,
     auditLogs: List<AdminAuditLog>,
+    onViewUserProfile: (String) -> Unit,
+    onUpdateReportStatus: (reportId: String, status: String, notes: String) -> Unit,
+    onSuspendReportedUser: (targetUid: String, reportId: String) -> Unit,
     onDismissReport: (reportId: String) -> Unit,
     onBanReportedUser: (targetUid: String, reportId: String) -> Unit
 ) {
+    var statusFilter by remember { mutableStateOf("All") }
+
+    val filteredReports = remember(reports, statusFilter) {
+        if (statusFilter == "All") reports
+        else reports.filter { it.status.equals(statusFilter, ignoreCase = true) }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Text("Pending User Reports (${reports.size})", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ErrorRed)
+            Text("User Safety & Moderation Reports", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextWhite)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text("Investigate member complaints, apply sanctions, or dismiss frivolous flags.", fontSize = 12.sp, color = TextMuted)
         }
 
-        if (reports.isEmpty()) {
-            item {
-                Text("Zero pending user safety complaints.", fontSize = 12.sp, color = TextMuted)
+        // Status Filter Chips
+        item {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                listOf("All", "pending", "under_review", "resolved", "dismissed").forEach { status ->
+                    val isSelected = statusFilter == status
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { statusFilter = status },
+                        label = {
+                            val count = if (status == "All") reports.size else reports.count { it.status.equals(status, ignoreCase = true) }
+                            Text("${status.replace("_", " ").replaceFirstChar { it.uppercase() }} ($count)")
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = BondlyPink,
+                            selectedLabelColor = TextWhite,
+                            containerColor = CharcoalCard,
+                            labelColor = TextMuted
+                        )
+                    )
+                }
             }
-        } else {
-            items(reports, key = { it.reportId }) { report ->
+        }
+
+        if (filteredReports.isEmpty()) {
+            item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = CharcoalCard),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ErrorRed.copy(alpha = 0.5f))
+                    colors = CardDefaults.cardColors(containerColor = CharcoalCard)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text("Reason: ${report.reason}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(report.details.ifBlank { "No additional details provided." }, fontSize = 12.sp, color = TextLightGrey)
+                    Box(modifier = Modifier.padding(24.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("No reports matching \"$statusFilter\".", fontSize = 13.sp, color = TextMuted)
+                    }
+                }
+            }
+        } else {
+            items(filteredReports, key = { it.reportId }) { report ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = CharcoalCard),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        when (report.status) {
+                            "pending" -> WarningOrange.copy(alpha = 0.6f)
+                            "under_review" -> SuperLikeBlue.copy(alpha = 0.6f)
+                            "resolved" -> OnlineGreen.copy(alpha = 0.6f)
+                            else -> CharcoalBorder
+                        }
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        // Header with Reported user info and status badge
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AsyncImage(
+                                model = report.reportedPhotoUrl.ifEmpty { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80" },
+                                contentDescription = report.reportedName,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clip(CircleShape)
+                                    .border(1.5.dp, BondlyPink, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = report.reportedName.ifBlank { "User ${report.reportedUid.take(6)}" },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = TextWhite
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (report.reportedPublicId.isNotBlank()) "ID: ${report.reportedPublicId} · UID: ${report.reportedUid.take(8)}..."
+                                           else "UID: ${report.reportedUid}",
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+
+                            // Status badge
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = when (report.status) {
+                                    "pending" -> WarningOrange.copy(alpha = 0.2f)
+                                    "under_review" -> SuperLikeBlue.copy(alpha = 0.2f)
+                                    "resolved" -> OnlineGreen.copy(alpha = 0.2f)
+                                    else -> TextMuted.copy(alpha = 0.2f)
+                                }
+                            ) {
+                                Text(
+                                    text = report.status.replace("_", " ").uppercase(),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (report.status) {
+                                        "pending" -> WarningOrange
+                                        "under_review" -> SuperLikeBlue
+                                        "resolved" -> OnlineGreen
+                                        else -> TextLightGrey
+                                    },
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(10.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        HorizontalDivider(color = CharcoalBorder, thickness = 0.5.dp)
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Reporter UID
+                        Text(
+                            text = "Reported by: ${report.reporterUid.take(12)}...",
+                            fontSize = 11.sp,
+                            color = TextMuted
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Selected reasons chips
+                        val reasonList = report.reasons.ifEmpty { listOf(report.reason) }.filter { it.isNotBlank() }
+                        if (reasonList.isNotEmpty()) {
+                            Text("Reasons Flagged:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                reasonList.forEach { reasonItem ->
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = CharcoalCardElevated,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                                    ) {
+                                        Text(
+                                            text = reasonItem,
+                                            fontSize = 11.sp,
+                                            color = TextWhite,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        // Additional message
+                        if (report.details.isNotBlank()) {
+                            Text("Reporter Message:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextLightGrey)
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = report.details,
+                                fontSize = 13.sp,
+                                color = TextWhite,
+                                lineHeight = 18.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        // Timestamp
+                        val timeStr = remember(report.createdAt) {
+                            try {
+                                val d = report.createdAt?.toDate() ?: Date()
+                                SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault()).format(d)
+                            } catch (_: Exception) { "Recent" }
+                        }
+                        Text("Submitted: $timeStr", fontSize = 11.sp, color = TextMuted)
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Admin Action Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { onViewUserProfile(report.reportedUid) },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                            ) {
+                                Text("Profile", fontSize = 11.sp, maxLines = 1)
+                            }
+
+                            if (report.status != "under_review") {
+                                OutlinedButton(
+                                    onClick = { onUpdateReportStatus(report.reportId, "under_review", "Investigating incident") },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, SuperLikeBlue)
+                                ) {
+                                    Text("Review", fontSize = 11.sp, color = SuperLikeBlue, maxLines = 1)
+                                }
+                            }
+
+                            if (report.status != "resolved") {
+                                OutlinedButton(
+                                    onClick = { onUpdateReportStatus(report.reportId, "resolved", "Reviewed and action taken") },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, OnlineGreen)
+                                ) {
+                                    Text("Resolve", fontSize = 11.sp, color = OnlineGreen, maxLines = 1)
+                                }
+                            }
+
                             OutlinedButton(
                                 onClick = { onDismissReport(report.reportId) },
                                 shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.height(32.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
                             ) {
-                                Text("Dismiss", fontSize = 11.sp)
+                                Text("Dismiss", fontSize = 11.sp, color = TextMuted, maxLines = 1)
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Button(
+                                onClick = { onSuspendReportedUser(report.reportedUid, report.reportId) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9100)),
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                            ) {
+                                Text("Suspend", fontSize = 11.sp, color = Color(0xFF121212), fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+
                             Button(
                                 onClick = { onBanReportedUser(report.reportedUid, report.reportId) },
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
-                                modifier = Modifier.height(32.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                                modifier = Modifier.weight(1f).height(34.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
                             ) {
-                                Text("Ban User", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextWhite)
+                                Text("Ban", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextWhite, maxLines = 1)
                             }
                         }
                     }
@@ -885,7 +1123,7 @@ private fun AdminReportsAndAuditTab(
         }
 
         item {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text("Admin Audit Logs", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD700))
         }
 

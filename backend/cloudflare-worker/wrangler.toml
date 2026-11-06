@@ -1,0 +1,10 @@
+name = "bondly-image-uploader"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "dating-buddy-b3581"
+MAX_FILE_SIZE_BYTES = 10485760 # 10 MB
+
+# The ImgBB API key must be set securely via Wrangler Secret and NEVER checked into source control:
+# wrangler secret put IMGBB_API_KEY

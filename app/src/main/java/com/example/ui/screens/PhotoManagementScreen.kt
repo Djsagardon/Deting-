@@ -41,23 +41,34 @@ fun PhotoManagementScreen(
     repository: BondlyRepository,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val imageRepo = remember { com.example.data.repository.ImageUploadRepository() }
     var photos by remember { mutableStateOf(profile.profilePhotoUrls) }
     var selectedSlotIndex by remember { mutableIntStateOf(-1) }
+    var isUploading by remember { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val list = photos.toMutableList()
-            if (selectedSlotIndex in 0 until list.size) {
-                list[selectedSlotIndex] = uri.toString()
-            } else if (list.size < 5) {
-                list.add(uri.toString())
-            }
-            photos = list
+            isUploading = true
             coroutineScope.launch {
-                repository.saveProfile(profile.copy(profilePhotoUrls = list, totalPhotoCount = list.size))
+                val uploadResult = imageRepo.uploadProfilePhoto(context, uri, currentUserId, selectedSlotIndex)
+                uploadResult.onSuccess { uploadedUrl ->
+                    val list = photos.toMutableList()
+                    if (selectedSlotIndex in 0 until list.size) {
+                        list[selectedSlotIndex] = uploadedUrl
+                    } else if (list.size < 5) {
+                        list.add(uploadedUrl)
+                    }
+                    photos = list
+                    repository.saveProfile(profile.copy(profilePhotoUrls = list, totalPhotoCount = list.size))
+                    android.widget.Toast.makeText(context, "Photo uploaded successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                }.onFailure { err ->
+                    android.widget.Toast.makeText(context, "Upload failed: ${err.message}", android.widget.Toast.LENGTH_LONG).show()
+                }
+                isUploading = false
             }
         }
     }
@@ -88,7 +99,18 @@ fun PhotoManagementScreen(
                 fontSize = 13.sp
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (isUploading) {
+                Row(
+                    modifier = Modifier.padding(bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BondlyPink, strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Uploading photo to secure storage...", fontSize = 12.sp, color = BondlyPink)
+                }
+            }
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
