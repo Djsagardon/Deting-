@@ -18,11 +18,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        val cfWorkerUrl = (project.findProperty("cloudflareWorkerUrl") as? String)
+        val imgbbKey = (project.findProperty("imgbbApiKey") as? String)
             ?.takeIf { it.isNotBlank() }
-            ?: System.getenv("CLOUDFLARE_WORKER_URL")
-            ?: "https://bondly-image-uploader.dating-buddy.workers.dev/upload"
-        buildConfigField("String", "CLOUDFLARE_WORKER_URL", "\"$cfWorkerUrl\"")
+            ?: System.getenv("IMGBB_API_KEY")
+            ?: ""
+        buildConfigField("String", "IMGBB_API_KEY", "\"$imgbbKey\"")
     }
 
     signingConfigs {

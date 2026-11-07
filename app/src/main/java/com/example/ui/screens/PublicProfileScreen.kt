@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -98,6 +99,16 @@ fun PublicProfileScreen(
             val photos = profile.profilePhotoUrls.ifEmpty {
                 listOf("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80")
             }
+            var selectedPhotoIndex by remember { mutableIntStateOf(0) }
+            var showFullScreenViewer by remember { mutableStateOf(false) }
+
+            if (showFullScreenViewer) {
+                com.example.ui.components.FullScreenImageViewer(
+                    photoUrls = photos,
+                    initialIndex = selectedPhotoIndex,
+                    onDismiss = { showFullScreenViewer = false }
+                )
+            }
 
             LazyColumn(
                 modifier = Modifier
@@ -119,6 +130,10 @@ fun PublicProfileScreen(
                                     .height(360.dp)
                                     .clip(RoundedCornerShape(20.dp))
                                     .border(1.dp, CharcoalBorder, RoundedCornerShape(20.dp))
+                                    .clickable {
+                                        selectedPhotoIndex = idx
+                                        showFullScreenViewer = true
+                                    }
                             ) {
                                 AsyncImage(
                                     model = photoUrl,

@@ -56,7 +56,7 @@ fun PhotoManagementScreen(
 
     // Upload manager manages the 5 slots and sequential uploads
     val uploadManager = remember {
-        ProfilePhotoUploadManager(imageRepo).apply {
+        ProfilePhotoUploadManager(repository = repository, imageRepo = imageRepo).apply {
             initializeFromExisting(profile.profilePhotoUrls)
         }
     }
@@ -66,8 +66,8 @@ fun PhotoManagementScreen(
     val activeSlotIndex by uploadManager.activeSlotIndex.collectAsState()
 
     var targetSingleSlotIndex by remember { mutableIntStateOf(-1) }
-    var showServerSettingsDialog by remember { mutableStateOf(false) }
-    var currentWorkerUrl by remember { mutableStateOf(ImageUploadConfig.getWorkerUrl(context)) }
+    var showImgbbSettingsDialog by remember { mutableStateOf(false) }
+    var currentApiKey by remember { mutableStateOf(ImageUploadConfig.getApiKey(context)) }
 
     // Multi-photo picker launcher: Selects up to 5 photos in ONE operation
     val multiPhotoPickerLauncher = rememberLauncherForActivityResult(
@@ -117,7 +117,7 @@ fun PhotoManagementScreen(
         if (state is PhotoSlotState.Failed) idx to state else null
     }
 
-    val isPlaceholderServer = ImageUploadConfig.isPlaceholderUrl(currentWorkerUrl)
+    val isApiKeyMissing = !ImageUploadConfig.isApiKeyConfigured(context)
 
     Scaffold(
         topBar = {
@@ -147,25 +147,25 @@ fun PhotoManagementScreen(
                     }
                 },
                 actions = {
-                    // Upload Server Diagnostics & Settings button
+                    // ImgBB API Diagnostics & Settings button
                     IconButton(
                         onClick = {
-                            currentWorkerUrl = ImageUploadConfig.getWorkerUrl(context)
-                            showServerSettingsDialog = true
+                            currentApiKey = ImageUploadConfig.getApiKey(context)
+                            showImgbbSettingsDialog = true
                         },
                         modifier = Modifier.testTag("server_settings_button")
                     ) {
                         BadgedBox(
                             badge = {
-                                if (isPlaceholderServer || failedSlots.isNotEmpty()) {
+                                if (isApiKeyMissing || failedSlots.isNotEmpty()) {
                                     Badge(containerColor = ErrorRed)
                                 }
                             }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CloudQueue,
-                                contentDescription = "Upload Server Settings",
-                                tint = if (isPlaceholderServer) WarningOrange else TextWhite
+                                contentDescription = "ImgBB API Settings",
+                                tint = if (isApiKeyMissing) WarningOrange else TextWhite
                             )
                         }
                     }
@@ -181,8 +181,8 @@ fun PhotoManagementScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            // Server warning / unconfigured alert banner
-            if (isPlaceholderServer) {
+            // ImgBB API key missing alert banner
+            if (isApiKeyMissing) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = WarningOrange.copy(alpha = 0.15f),
@@ -190,7 +190,7 @@ fun PhotoManagementScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
-                        .clickable { showServerSettingsDialog = true }
+                        .clickable { showImgbbSettingsDialog = true }
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
@@ -205,18 +205,18 @@ fun PhotoManagementScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Upload Server Unconfigured",
+                                text = "ImgBB API Key Not Configured",
                                 color = TextWhite,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
                             )
                             Text(
-                                text = "Using placeholder URL. Tap to set your Cloudflare Worker URL.",
+                                text = "Direct ImgBB uploads require an API key. Tap to configure.",
                                 color = TextLightGrey,
                                 fontSize = 11.sp
                             )
                         }
-                        TextButton(onClick = { showServerSettingsDialog = true }) {
+                        TextButton(onClick = { showImgbbSettingsDialog = true }) {
                             Text("Configure", color = WarningOrange, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -347,7 +347,7 @@ fun PhotoManagementScreen(
                             }
                         },
                         onDeleteClick = {
-                            uploadManager.clearSlot(slotIndex)
+                            uploadManager.clearSlot(slotIndex, currentUserId)
                         },
                         onRetryClick = {
                             uploadManager.retrySlot(context, slotIndex, currentUserId)
@@ -358,22 +358,22 @@ fun PhotoManagementScreen(
         }
     }
 
-    // Cloudflare Upload Server Settings & Diagnostics Dialog
-    if (showServerSettingsDialog) {
-        UploadServerSettingsDialog(
-            currentUrl = currentWorkerUrl,
+    // ImgBB Upload Diagnostics & Settings Dialog
+    if (showImgbbSettingsDialog) {
+        ImgbbSettingsDialog(
+            currentKey = currentApiKey,
             imageRepo = imageRepo,
-            onDismiss = { showServerSettingsDialog = false },
-            onSaveUrl = { newUrl ->
-                ImageUploadConfig.setWorkerUrl(context, newUrl)
-                currentWorkerUrl = ImageUploadConfig.getWorkerUrl(context)
-                Toast.makeText(context, "Upload server URL saved!", Toast.LENGTH_SHORT).show()
-                showServerSettingsDialog = false
+            onDismiss = { showImgbbSettingsDialog = false },
+            onSaveKey = { newKey ->
+                ImageUploadConfig.setApiKey(context, newKey)
+                currentApiKey = ImageUploadConfig.getApiKey(context)
+                Toast.makeText(context, "ImgBB API key saved!", Toast.LENGTH_SHORT).show()
+                showImgbbSettingsDialog = false
             },
             onResetToDefault = {
-                ImageUploadConfig.resetWorkerUrl(context)
-                currentWorkerUrl = ImageUploadConfig.getWorkerUrl(context)
-                Toast.makeText(context, "Reset to build default URL.", Toast.LENGTH_SHORT).show()
+                ImageUploadConfig.resetApiKey(context)
+                currentApiKey = ImageUploadConfig.getApiKey(context)
+                Toast.makeText(context, "Reset to build default API key.", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -610,21 +610,21 @@ private fun PhotoSlotCard(
 }
 
 /**
- * Upload Server Settings & Diagnostics Dialog
- * Allows users to inspect connectivity, test /health, and update the Worker URL without recompiling.
+ * ImgBB Direct API Key Configuration & Connection Diagnostics Dialog
+ * Allows developers and users to inspect connectivity, test key status, and update the ImgBB API Key.
  */
 @Composable
-private fun UploadServerSettingsDialog(
-    currentUrl: String,
+private fun ImgbbSettingsDialog(
+    currentKey: String,
     imageRepo: ImageUploadRepository,
     onDismiss: () -> Unit,
-    onSaveUrl: (String) -> Unit,
+    onSaveKey: (String) -> Unit,
     onResetToDefault: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var inputUrl by remember { mutableStateOf(currentUrl) }
+    var inputKey by remember { mutableStateOf(currentKey) }
     var isTestingHealth by remember { mutableStateOf(false) }
     var healthResult by remember { mutableStateOf<ServerHealthResult?>(null) }
 
@@ -654,7 +654,7 @@ private fun UploadServerSettingsDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Upload Server Settings",
+                            text = "ImgBB API Settings",
                             color = TextWhite,
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp
@@ -668,7 +668,7 @@ private fun UploadServerSettingsDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Bondly uses a secure server proxy to protect user privacy and encrypt all image transfers.",
+                    text = "Bondly uploads images directly to the official ImgBB API (api.imgbb.com/1/upload).",
                     color = TextLightGrey,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -677,7 +677,7 @@ private fun UploadServerSettingsDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "Cloudflare Worker Endpoint URL:",
+                    text = "ImgBB API Key:",
                     color = TextWhite,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp
@@ -686,9 +686,9 @@ private fun UploadServerSettingsDialog(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 OutlinedTextField(
-                    value = inputUrl,
-                    onValueChange = { inputUrl = it },
-                    placeholder = { Text("https://your-worker.workers.dev/upload", color = TextMuted, fontSize = 12.sp) },
+                    value = inputKey,
+                    onValueChange = { inputKey = it },
+                    placeholder = { Text("Enter your ImgBB API Key", color = TextMuted, fontSize = 12.sp) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = CharcoalDark,
@@ -701,7 +701,7 @@ private fun UploadServerSettingsDialog(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("worker_url_input")
+                        .testTag("imgbb_key_input")
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -711,8 +711,7 @@ private fun UploadServerSettingsDialog(
                     onClick = {
                         isTestingHealth = true
                         healthResult = null
-                        // Temporarily apply input URL to test it
-                        ImageUploadConfig.setWorkerUrl(context, inputUrl)
+                        ImageUploadConfig.setApiKey(context, inputKey)
                         coroutineScope.launch {
                             val result = imageRepo.testHealth(context)
                             healthResult = result
@@ -725,7 +724,7 @@ private fun UploadServerSettingsDialog(
                     colors = ButtonDefaults.buttonColors(containerColor = CharcoalCard),
                     border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder),
                     shape = RoundedCornerShape(12.dp),
-                    enabled = !isTestingHealth && inputUrl.isNotBlank()
+                    enabled = !isTestingHealth && inputKey.isNotBlank()
                 ) {
                     if (isTestingHealth) {
                         CircularProgressIndicator(
@@ -734,7 +733,7 @@ private fun UploadServerSettingsDialog(
                             strokeWidth = 2.dp
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Testing /health...", color = TextWhite, fontSize = 12.sp)
+                        Text("Verifying ImgBB...", color = TextWhite, fontSize = 12.sp)
                     } else {
                         Icon(
                             imageVector = Icons.Default.NetworkCheck,
@@ -743,7 +742,7 @@ private fun UploadServerSettingsDialog(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Test Connection (/health)", color = TextWhite, fontSize = 12.sp)
+                        Text("Verify API Key", color = TextWhite, fontSize = 12.sp)
                     }
                 }
 
@@ -770,7 +769,7 @@ private fun UploadServerSettingsDialog(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (res.isHealthy) "Connection Successful" else "Connection Test Failed",
+                                    text = if (res.isHealthy) "Key Valid & Connected" else "Connection Failed",
                                     fontWeight = FontWeight.Bold,
                                     color = if (res.isHealthy) OnlineGreen else ErrorRed,
                                     fontSize = 12.sp
@@ -801,12 +800,12 @@ private fun UploadServerSettingsDialog(
                     }
 
                     Button(
-                        onClick = { onSaveUrl(inputUrl) },
+                        onClick = { onSaveKey(inputKey) },
                         colors = ButtonDefaults.buttonColors(containerColor = BondlyPink),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .weight(1.3f)
-                            .testTag("save_worker_url_button")
+                            .testTag("save_imgbb_key_button")
                     ) {
                         Text("Save & Apply", fontWeight = FontWeight.Bold, color = TextWhite, fontSize = 13.sp)
                     }

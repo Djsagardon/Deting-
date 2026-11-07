@@ -36,6 +36,7 @@ fun ProfileCard(
     modifier: Modifier = Modifier
 ) {
     var photoIndex by remember(profile.userId) { mutableIntStateOf(0) }
+    var showFullScreenViewer by remember { mutableStateOf(false) }
     val photos = profile.profilePhotoUrls.ifEmpty {
         listOf("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80")
     }
@@ -120,19 +121,31 @@ fun ProfileCard(
                         }
                     }
 
-                    if (profile.publicUserId.isNotEmpty()) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color.Black.copy(alpha = 0.65f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (profile.publicUserId.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color.Black.copy(alpha = 0.65f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, CharcoalBorder)
+                            ) {
+                                Text(
+                                    text = profile.publicUserId,
+                                    color = TextWhite,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        IconButton(
+                            onClick = { showFullScreenViewer = true },
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.65f))
                         ) {
-                            Text(
-                                text = profile.publicUserId,
-                                color = TextWhite,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
+                            Icon(Icons.Default.Fullscreen, contentDescription = "View Fullscreen", tint = TextWhite, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
@@ -276,5 +289,13 @@ fun ProfileCard(
                 }
             }
         }
+    }
+
+    if (showFullScreenViewer) {
+        FullScreenImageViewer(
+            photoUrls = photos,
+            initialIndex = photoIndex,
+            onDismiss = { showFullScreenViewer = false }
+        )
     }
 }

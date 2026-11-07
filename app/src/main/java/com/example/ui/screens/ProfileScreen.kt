@@ -44,6 +44,8 @@ fun ProfileScreen(
     val photos = profile.profilePhotoUrls.ifEmpty {
         listOf("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80")
     }
+    var selectedPhotoIndex by remember { mutableIntStateOf(0) }
+    var showFullScreenViewer by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -104,6 +106,10 @@ fun ProfileScreen(
                                     .height(340.dp)
                                     .clip(RoundedCornerShape(20.dp))
                                     .border(1.dp, CharcoalBorder, RoundedCornerShape(20.dp))
+                                    .clickable {
+                                        selectedPhotoIndex = idx
+                                        showFullScreenViewer = true
+                                    }
                             ) {
                                 AsyncImage(
                                     model = photoUrl,
@@ -404,6 +410,14 @@ fun ProfileScreen(
                 }
             }
         }
+    }
+
+    if (showFullScreenViewer) {
+        com.example.ui.components.FullScreenImageViewer(
+            photoUrls = photos,
+            initialIndex = selectedPhotoIndex,
+            onDismiss = { showFullScreenViewer = false }
+        )
     }
 }
 

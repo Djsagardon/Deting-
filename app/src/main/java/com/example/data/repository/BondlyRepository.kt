@@ -179,6 +179,57 @@ class BondlyRepository(
         }
     }
 
+    /**
+     * Removes a photo slot from the user's Firestore document on the live server.
+     */
+    suspend fun removePhotoSlot(uid: String, slotIndex: Int): Result<Unit> {
+        if (!NetworkConnectivityManager.isConnected()) {
+            return Result.failure(NoInternetException("No internet connection. Please connect to the internet and try again."))
+        }
+        return try {
+            val docRef = firestore.collection("users").document(uid)
+            val snap = try {
+                docRef.get(Source.SERVER).await()
+            } catch (_: Exception) {
+                null
+            }
+            val profile = snap?.toObject(UserProfile::class.java) ?: UserProfile(userId = uid)
+            val currentUrls = profile.profilePhotoUrls.toMutableList()
+            if (slotIndex in currentUrls.indices) {
+                currentUrls.removeAt(slotIndex)
+            }
+            val cleanUrls = currentUrls.filter { it.isNotBlank() }
+
+            val allFiveCompleted = cleanUrls.size == 5
+            val isNowCompleted = allFiveCompleted &&
+                    profile.displayName.isNotBlank() &&
+                    profile.gender.isNotBlank() &&
+                    profile.age >= 18 &&
+                    profile.rulesAccepted
+
+            val updatePayload = mapOf(
+                "userId" to uid,
+                "profilePhotoUrls" to cleanUrls,
+                "totalPhotoCount" to cleanUrls.size,
+                "profileCompleted" to isNowCompleted,
+                "updatedAt" to Timestamp.now()
+            )
+            docRef.set(updatePayload, SetOptions.merge()).await()
+
+            if (slotIndex == 0 && profile.publicUserId.isNotEmpty()) {
+                try {
+                    val newPrimary = cleanUrls.firstOrNull() ?: ""
+                    firestore.collection("public_user_index").document(profile.publicUserId).update(
+                        mapOf("photoUrl" to newPrimary)
+                    ).await()
+                } catch (_: Exception) {}
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun allocateUniquePublicId(uid: String): String {
         if (!NetworkConnectivityManager.isConnected()) {
             throw NoInternetException("No internet connection. Please connect to the internet and try again.")

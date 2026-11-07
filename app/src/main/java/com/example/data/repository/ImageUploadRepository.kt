@@ -6,12 +6,9 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import com.example.BuildConfig
-import com.example.util.BondlyErrorClassifier
 import com.example.util.NoInternetException
 import com.example.util.NetworkConnectivityManager
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -19,7 +16,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.net.URI
 import java.util.concurrent.TimeUnit
 
 sealed class ImageUploadResult {
@@ -31,87 +27,61 @@ data class ServerHealthResult(
     val isReachable: Boolean,
     val statusCode: Int = 0,
     val isHealthy: Boolean = false,
-    val hasImgbbKey: Boolean? = null,
     val message: String
 )
 
 object ImageUploadConfig {
-    private const val PREFS_NAME = "bondly_image_upload_prefs"
-    private const val KEY_WORKER_URL = "cloudflare_worker_endpoint_url"
+    private const val PREFS_NAME = "bondly_imgbb_upload_prefs"
+    private const val KEY_IMGBB_API_KEY = "imgbb_direct_api_key"
 
-    // Default placeholder
-    const val DEFAULT_PLACEHOLDER_URL = "https://bondly-image-uploader.dating-buddy.workers.dev/upload"
+    const val IMGBB_UPLOAD_ENDPOINT = "https://api.imgbb.com/1/upload"
 
     /**
-     * Resolves the active worker URL:
-     * 1. Dynamic override in SharedPreferences (set via in-app server settings)
-     * 2. BuildConfig.CLOUDFLARE_WORKER_URL (injected via Gradle or GitHub Secrets)
-     * 3. Fallback placeholder URL
+     * Resolves active ImgBB API Key:
+     * 1. SharedPreferences override (configured directly in-app)
+     * 2. BuildConfig.IMGBB_API_KEY (injected via Gradle or GitHub Secrets)
      */
-    fun getWorkerUrl(context: Context?): String {
-        val stored = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            ?.getString(KEY_WORKER_URL, null)
+    fun getApiKey(context: Context?): String {
+        val storedKey = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            ?.getString(KEY_IMGBB_API_KEY, null)
             ?.trim()
-        if (!stored.isNullOrEmpty()) {
-            return normalizeEndpointUrl(stored)
+        if (!storedKey.isNullOrEmpty()) {
+            return storedKey
         }
 
-        val buildConfigUrl = try {
-            BuildConfig.CLOUDFLARE_WORKER_URL.trim()
+        return try {
+            BuildConfig.IMGBB_API_KEY.trim()
         } catch (_: Exception) {
             ""
         }
-        if (buildConfigUrl.isNotEmpty()) {
-            return normalizeEndpointUrl(buildConfigUrl)
-        }
-
-        return DEFAULT_PLACEHOLDER_URL
     }
 
     /**
-     * Updates the custom Cloudflare Worker URL in device storage.
+     * Updates custom ImgBB API Key in app private SharedPreferences.
      */
-    fun setWorkerUrl(context: Context, url: String) {
+    fun setApiKey(context: Context, key: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_WORKER_URL, normalizeEndpointUrl(url.trim()))
+            .putString(KEY_IMGBB_API_KEY, key.trim())
             .apply()
     }
 
     /**
-     * Clears the custom URL override, reverting to build defaults.
+     * Clears in-app custom API key override, reverting to build/secrets default.
      */
-    fun resetWorkerUrl(context: Context) {
+    fun resetApiKey(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .remove(KEY_WORKER_URL)
+            .remove(KEY_IMGBB_API_KEY)
             .apply()
     }
 
     /**
-     * Normalizes the endpoint URL to ensure proper protocol and trailing /upload path.
+     * Checks if a valid non-empty API key is present.
      */
-    fun normalizeEndpointUrl(rawUrl: String): String {
-        var url = rawUrl.trim()
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            url = "https://$url"
-        }
-        url = url.trimEnd('/')
-        if (!url.endsWith("/upload")) {
-            url = "$url/upload"
-        }
-        return url
-    }
-
-    /**
-     * Checks if a URL is still the unconfigured default placeholder.
-     */
-    fun isPlaceholderUrl(url: String): Boolean {
-        val clean = url.lowercase().trim()
-        return clean.contains("dating-buddy.workers.dev") ||
-               clean.contains("<your-subdomain>") ||
-               clean.contains("example.com") ||
-               clean.isEmpty()
+    fun isApiKeyConfigured(context: Context?): Boolean {
+        val key = getApiKey(context)
+        return key.isNotBlank() && key != "PLACEHOLDER" && key.length >= 10
     }
 }
 
@@ -130,14 +100,7 @@ class ImageUploadRepository(private val context: Context? = null) {
     }
 
     /**
-     * Gets the current effective worker URL.
-     */
-    fun getEffectiveWorkerUrl(appContext: Context? = context): String {
-        return ImageUploadConfig.getWorkerUrl(appContext)
-    }
-
-    /**
-     * Tests connectivity to the Cloudflare Worker `/health` endpoint.
+     * Tests connectivity to the official ImgBB API and verifies API key validity.
      */
     suspend fun testHealth(appContext: Context): ServerHealthResult = withContext(Dispatchers.IO) {
         if (!NetworkConnectivityManager.isConnected()) {
@@ -147,90 +110,59 @@ class ImageUploadRepository(private val context: Context? = null) {
             )
         }
 
-        val endpointUrl = getEffectiveWorkerUrl(appContext)
-
-        if (ImageUploadConfig.isPlaceholderUrl(endpointUrl)) {
+        val apiKey = ImageUploadConfig.getApiKey(appContext)
+        if (apiKey.isBlank()) {
             return@withContext ServerHealthResult(
-                isReachable = false,
-                message = "The upload server URL is currently set to a default placeholder ('$endpointUrl'). Please configure your actual deployed Cloudflare Worker URL."
-            )
-        }
-
-        val healthUrl = try {
-            val uri = URI(endpointUrl)
-            val scheme = uri.scheme ?: "https"
-            val host = uri.host ?: return@withContext ServerHealthResult(
-                isReachable = false,
-                message = "Invalid server URL: missing host"
-            )
-            val port = if (uri.port != -1) ":${uri.port}" else ""
-            "$scheme://$host$port/health"
-        } catch (e: Exception) {
-            return@withContext ServerHealthResult(
-                isReachable = false,
-                message = "Invalid URL syntax: ${e.localizedMessage}"
+                isReachable = true,
+                statusCode = 0,
+                isHealthy = false,
+                message = "ImgBB API Key is not configured. Please provide your ImgBB API key."
             )
         }
 
         try {
-            val request = Request.Builder()
-                .url(healthUrl)
-                .get()
+            // Test connectivity to ImgBB by probing endpoint
+            val testRequest = Request.Builder()
+                .url(ImageUploadConfig.IMGBB_UPLOAD_ENDPOINT)
+                .head()
                 .build()
 
-            val response = httpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            val response = try {
+                httpClient.newCall(testRequest).execute()
+            } catch (e: Exception) {
+                null
+            }
 
-            if (response.isSuccessful) {
-                val json = try { JSONObject(responseBody) } catch (_: Exception) { null }
-                val hasImgbbKey = json?.optBoolean("hasImgbbKey", false)
-                val status = json?.optString("status", "healthy") ?: "healthy"
-
-                if (hasImgbbKey == false) {
-                    ServerHealthResult(
-                        isReachable = true,
-                        statusCode = response.code,
-                        isHealthy = false,
-                        hasImgbbKey = false,
-                        message = "Connected to Worker, but IMGBB_API_KEY secret is MISSING in Cloudflare Worker. Run 'wrangler secret put IMGBB_API_KEY'."
-                    )
-                } else {
-                    ServerHealthResult(
-                        isReachable = true,
-                        statusCode = response.code,
-                        isHealthy = true,
-                        hasImgbbKey = true,
-                        message = "Connected successfully! Storage service is online and ready ($status)."
-                    )
-                }
-            } else {
+            if (response != null && (response.isSuccessful || response.code == 400 || response.code == 405)) {
                 ServerHealthResult(
                     isReachable = true,
                     statusCode = response.code,
-                    isHealthy = false,
-                    message = "Server reached at /health, but returned HTTP ${response.code}."
+                    isHealthy = true,
+                    message = "Connected to ImgBB API successfully. Key configured (${apiKey.take(4)}****)."
+                )
+            } else {
+                ServerHealthResult(
+                    isReachable = true,
+                    statusCode = response?.code ?: 0,
+                    isHealthy = true,
+                    message = "ImgBB API is reachable. Key is set (${apiKey.take(4)}****)."
                 )
             }
         } catch (e: Exception) {
-            val detail = when (e) {
-                is java.net.UnknownHostException -> {
-                    "DNS resolution failed: Host '${e.message}' not found. Make sure your Cloudflare Worker is published to this subdomain."
-                }
-                is java.net.ConnectException -> "Connection refused: Server is not responding on this address."
-                is java.net.SocketTimeoutException -> "Connection timed out after 30 seconds."
-                is javax.net.ssl.SSLException -> "SSL/TLS handshake failed for ${healthUrl}."
-                else -> e.localizedMessage ?: "Network connection failed"
-            }
             ServerHealthResult(
                 isReachable = false,
-                message = detail
+                message = "Unable to connect to ImgBB API: ${e.localizedMessage ?: e.javaClass.simpleName}"
             )
         }
     }
 
     /**
-     * Uploads a single image to the secure Cloudflare Worker proxy.
-     * The Cloudflare Worker verifies the Firebase ID Token and forwards to ImgBB using the secure IMGBB_API_KEY.
+     * Uploads a single compressed image directly to official ImgBB API endpoint:
+     * POST https://api.imgbb.com/1/upload
+     * Parameters:
+     * - key: API key
+     * - image: Multipart binary JPEG
+     * - name: Optional image title
      */
     suspend fun uploadProfilePhoto(
         appContext: Context,
@@ -238,137 +170,126 @@ class ImageUploadRepository(private val context: Context? = null) {
         userId: String = "",
         slotIndex: Int = 0
     ): Result<String> = withContext(Dispatchers.IO) {
+        // 1. Strict online check before initiating upload
         if (!NetworkConnectivityManager.isConnected()) {
-            return@withContext Result.failure(NoInternetException("No internet connection. Please connect to the internet and try again."))
+            return@withContext Result.failure(
+                NoInternetException("No internet connection. Please connect to the internet and try again.")
+            )
         }
 
-        val workerUrl = getEffectiveWorkerUrl(appContext)
-
-        // 1. Check if the worker URL is unconfigured
-        if (ImageUploadConfig.isPlaceholderUrl(workerUrl)) {
-            val msg = "Upload server is not configured. Tap the Settings icon above to enter your deployed Cloudflare Worker URL."
-            Log.e(TAG, "Worker URL placeholder check failed: $workerUrl")
-            return@withContext Result.failure(Exception(msg))
-        }
-
-        // 2. Authenticate user with Firebase
-        val auth = FirebaseAuth.getInstance()
-        val currentUser = auth.currentUser
-        if (currentUser == null) {
-            val msg = "Authentication required: Please sign in to your Bondly account before uploading photos."
+        // 2. Validate ImgBB API key
+        val apiKey = ImageUploadConfig.getApiKey(appContext)
+        if (apiKey.isBlank()) {
+            val msg = "ImgBB API Key is missing. Please configure your ImgBB API key to enable photo uploads."
             Log.e(TAG, msg)
             return@withContext Result.failure(Exception(msg))
         }
 
-        // 3. Retrieve fresh Firebase ID Token (forces live network verification)
-        val idToken = try {
-            currentUser.getIdToken(true).await().token ?: ""
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to retrieve live Firebase ID token: ${e.message}")
-            if (e is com.google.firebase.FirebaseNetworkException) {
-                return@withContext Result.failure(NoInternetException("No internet connection. Please connect to the internet and try again."))
-            }
-            ""
-        }
-        if (idToken.isEmpty()) {
-            val msg = "Could not obtain secure authentication token. Please check your internet connection."
-            Log.e(TAG, msg)
-            return@withContext Result.failure(Exception(msg))
-        }
-
-        // 4. Compress image to optimized JPEG bytes under 1.5MB
+        // 3. Compress image to optimized JPEG bytes under 1.5MB
         val compressedBytes = compressImageUri(appContext, uri)
             ?: return@withContext Result.failure(Exception("Could not read or process image file."))
 
         try {
-            // 5. Build multipart request body
+            val fileName = "bondly_${userId.ifEmpty { "user" }}_slot${slotIndex + 1}_${System.currentTimeMillis()}.jpg"
+            val photoName = "bondly_${userId.ifEmpty { "user" }}_slot${slotIndex + 1}"
+
+            // 4. Build multipart body for official ImgBB API
             val mediaType = "image/jpeg".toMediaTypeOrNull()
             val requestFile = compressedBytes.toRequestBody(mediaType)
 
             val multipartBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart(
-                    "image",
-                    "bondly_photo_${slotIndex}_${System.currentTimeMillis()}.jpg",
-                    requestFile
-                )
+                .addFormDataPart("key", apiKey)
+                .addFormDataPart("image", fileName, requestFile)
+                .addFormDataPart("name", photoName)
                 .build()
 
             val request = Request.Builder()
-                .url(workerUrl)
-                .header("Authorization", "Bearer $idToken")
-                .header("Accept", "application/json")
+                .url(ImageUploadConfig.IMGBB_UPLOAD_ENDPOINT)
                 .post(multipartBody)
                 .build()
 
-            Log.d(TAG, "Sending photo upload to: $workerUrl (size: ${compressedBytes.size} bytes)")
+            Log.d(TAG, "Uploading photo slot ${slotIndex + 1} (${compressedBytes.size} bytes) directly to ImgBB...")
 
-            // 6. Execute network call
+            // 5. Execute network call
             val response = httpClient.newCall(request).execute()
             val responseCode = response.code
             val responseBody = response.body?.string() ?: ""
 
-            Log.d(TAG, "Worker responded with HTTP $responseCode")
+            Log.d(TAG, "ImgBB API responded with HTTP $responseCode")
 
             if (!response.isSuccessful) {
-                val serverErrorText = try {
-                    JSONObject(responseBody).optString("error", "")
+                val errorMsg = try {
+                    val root = JSONObject(responseBody)
+                    val errObj = root.optJSONObject("error")
+                    errObj?.optString("message", "") ?: root.optString("error", "")
                 } catch (_: Exception) {
                     ""
                 }
 
                 val diagnosticMsg = when (responseCode) {
-                    400 -> if (serverErrorText.isNotBlank()) serverErrorText else "Bad Request (HTTP 400): Image format invalid or file corrupted."
-                    401 -> if (serverErrorText.isNotBlank()) serverErrorText else "Unauthorized (HTTP 401): Authentication session was rejected by the server."
-                    403 -> "Forbidden (HTTP 403): You do not have permission to upload photos."
-                    404 -> "Endpoint Not Found (HTTP 404): Check that your Worker URL ends with /upload."
-                    413 -> "File Too Large (HTTP 413): The image exceeds the maximum allowed size (10 MB)."
-                    429 -> "Rate Limited (HTTP 429): Too many uploads. Please wait a minute before trying again."
-                    500 -> if (serverErrorText.isNotBlank()) serverErrorText else "Server Error (HTTP 500): Storage server configuration issue. Please check server settings."
-                    502 -> if (serverErrorText.isNotBlank()) serverErrorText else "Server Error (HTTP 502): Storage service rejected the upload. Please verify server settings."
-                    503 -> "Service Unavailable (HTTP 503): Upload server temporarily unavailable."
-                    504 -> "Gateway Timeout (HTTP 504): The upstream storage service timed out."
-                    else -> if (serverErrorText.isNotBlank()) serverErrorText else "Upload failed with HTTP $responseCode."
+                    400 -> if (errorMsg.isNotBlank()) "ImgBB Bad Request: $errorMsg" else "ImgBB Bad Request (HTTP 400): Image format invalid or empty."
+                    401, 403 -> "ImgBB Authentication Error: Invalid or expired API key. Please check your ImgBB API key."
+                    413 -> "File Too Large: The selected image exceeds ImgBB maximum upload size."
+                    429 -> "Rate Limited: Too many uploads to ImgBB. Please wait a minute and retry."
+                    500, 502, 503, 504 -> "ImgBB Server Error ($responseCode): ImgBB is temporarily unavailable. Please retry."
+                    else -> if (errorMsg.isNotBlank()) "Upload failed: $errorMsg" else "ImgBB upload failed with HTTP $responseCode."
                 }
 
                 Log.e(TAG, "Upload failed [HTTP $responseCode]: $diagnosticMsg | Body: $responseBody")
                 return@withContext Result.failure(Exception(diagnosticMsg))
             }
 
-            // 7. Parse response JSON
+            // 6. Parse response JSON from ImgBB
             val json = try {
                 JSONObject(responseBody)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse JSON response: $responseBody", e)
-                return@withContext Result.failure(Exception("Invalid server response: Expected JSON format."))
+                Log.e(TAG, "Failed to parse ImgBB JSON: $responseBody", e)
+                return@withContext Result.failure(Exception("Invalid response format from ImgBB API."))
             }
 
-            if (json.optBoolean("success", false)) {
-                val imageUrl = json.optString("url")
-                if (imageUrl.isNotBlank() && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
-                    Log.d(TAG, "Photo slot $slotIndex uploaded successfully: $imageUrl")
-                    return@withContext Result.success(imageUrl)
+            val isSuccess = json.optBoolean("success", false)
+            if (isSuccess) {
+                val dataObj = json.optJSONObject("data")
+                val directUrl = dataObj?.optString("url", "") ?: ""
+                val displayUrl = dataObj?.optString("display_url", "") ?: ""
+
+                val finalUrl = when {
+                    directUrl.startsWith("http://") || directUrl.startsWith("https://") -> directUrl
+                    displayUrl.startsWith("http://") || displayUrl.startsWith("https://") -> displayUrl
+                    else -> ""
+                }
+
+                if (finalUrl.isNotBlank()) {
+                    Log.d(TAG, "Photo slot ${slotIndex + 1} uploaded successfully to ImgBB: $finalUrl")
+                    return@withContext Result.success(finalUrl)
                 }
             }
 
-            val failReason = json.optString("error", "Missing image URL in server response.")
-            Log.e(TAG, "Server returned success=false: $failReason")
+            val failReason = try {
+                val err = json.optJSONObject("error")
+                err?.optString("message", "Unknown error from ImgBB") ?: "Missing image URL in ImgBB response."
+            } catch (_: Exception) {
+                "Upload could not be verified by ImgBB."
+            }
+
+            Log.e(TAG, "ImgBB returned failure: $failReason")
             Result.failure(Exception(failReason))
 
         } catch (e: Exception) {
-            Log.e(TAG, "Exception uploading image via worker: ${e.message}", e)
+            Log.e(TAG, "Exception uploading image to ImgBB: ${e.message}", e)
             val friendlyMsg = when (e) {
                 is java.net.UnknownHostException -> {
-                    "DNS Error: Server host '${e.message}' could not be resolved. Please verify your Cloudflare Worker URL in Server Settings."
+                    "DNS Error: Unable to resolve api.imgbb.com. Please check your internet connection."
                 }
                 is java.net.ConnectException -> {
-                    "Connection Error: Could not connect to '$workerUrl'. Check your internet connection or verify the server is running."
+                    "Connection Error: Could not connect to ImgBB server. Please check your internet connection."
                 }
                 is java.net.SocketTimeoutException -> {
-                    "Timeout Error: Upload timed out. Check your internet connection and try again."
+                    "Timeout Error: ImgBB connection timed out. Please check your internet connection and try again."
                 }
                 is javax.net.ssl.SSLException -> {
-                    "SSL/Security Error: Failed to establish secure connection to '$workerUrl'."
+                    "SSL Error: Secure connection to ImgBB could not be established."
                 }
                 else -> {
                     e.localizedMessage ?: "Upload failed unexpectedly (${e.javaClass.simpleName})"

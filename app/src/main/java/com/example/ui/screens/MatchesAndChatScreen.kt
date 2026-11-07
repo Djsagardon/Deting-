@@ -272,12 +272,14 @@ fun ActiveChatView(
     onStartCall: (Boolean) -> Unit,
     onViewProfile: () -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     val messages by repository.observeMessages(match.id).collectAsState(initial = emptyList())
     var inputText by remember { mutableStateOf("") }
     var warningMessage by remember { mutableStateOf<String?>(null) }
+    var showFullPhoto by remember { mutableStateOf(false) }
 
     // Auto mark all incoming messages as seen when reading
     LaunchedEffect(match.id, messages.size) {
@@ -291,13 +293,19 @@ fun ActiveChatView(
         }
     }
 
+    if (showFullPhoto && partnerPhoto.isNotBlank()) {
+        com.example.ui.components.FullScreenImageViewer(
+            photoUrls = listOf(partnerPhoto),
+            onDismiss = { showFullPhoto = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { onViewProfile() }
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         AsyncImage(
                             model = partnerPhoto.ifEmpty { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80" },
@@ -306,9 +314,14 @@ fun ActiveChatView(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(CircleShape)
+                                .clickable {
+                                    if (partnerPhoto.isNotBlank()) {
+                                        showFullPhoto = true
+                                    }
+                                }
                         )
                         Spacer(modifier = Modifier.width(10.dp))
-                        Column {
+                        Column(modifier = Modifier.clickable { onViewProfile() }) {
                             Text(partnerName, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                             Text("Online", color = OnlineGreen, fontSize = 11.sp)
                         }

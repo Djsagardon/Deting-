@@ -178,23 +178,22 @@ jobs:
       - name: Build Debug APK
         if: ${{ github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'debug' || github.event_name != 'workflow_dispatch' }}
         env:
-          CLOUDFLARE_WORKER_URL: ${{ secrets.CLOUDFLARE_WORKER_URL }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
           EXTRA_ARGS=""
-          if [ -n "$CLOUDFLARE_WORKER_URL" ]; then
-            echo "Configuring Cloudflare Worker URL from secret..."
-            EXTRA_ARGS="-PcloudflareWorkerUrl=$CLOUDFLARE_WORKER_URL"
+          if [ -n "$IMGBB_API_KEY" ]; then
+            EXTRA_ARGS="-PimgbbApiKey=$IMGBB_API_KEY"
           fi
           ./gradlew assembleDebug --stacktrace $EXTRA_ARGS
 
       - name: Build Release APK
         if: ${{ github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'release' || github.event_name != 'workflow_dispatch' }}
         env:
-          CLOUDFLARE_WORKER_URL: ${{ secrets.CLOUDFLARE_WORKER_URL }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
           EXTRA_ARGS=""
-          if [ -n "$CLOUDFLARE_WORKER_URL" ]; then
-            EXTRA_ARGS="-PcloudflareWorkerUrl=$CLOUDFLARE_WORKER_URL"
+          if [ -n "$IMGBB_API_KEY" ]; then
+            EXTRA_ARGS="-PimgbbApiKey=$IMGBB_API_KEY"
           fi
           ./gradlew assembleRelease --stacktrace $EXTRA_ARGS
 

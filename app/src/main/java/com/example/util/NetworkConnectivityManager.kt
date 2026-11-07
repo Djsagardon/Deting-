@@ -148,7 +148,7 @@ object NetworkConnectivityManager {
     suspend fun probeLiveInternet(): Boolean = withContext(Dispatchers.IO) {
         val probeUrls = listOf(
             "https://clients3.google.com/generate_204",
-            "https://www.cloudflare.com/cdn-cgi/trace"
+            "https://www.google.com/generate_204"
         )
         for (urlString in probeUrls) {
             var connection: HttpURLConnection? = null

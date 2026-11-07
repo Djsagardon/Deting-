@@ -158,13 +158,18 @@ class ProfilePhotoUploadManager(
     }
 
     /**
-     * Clears a specific slot back to Empty.
+     * Clears a specific slot back to Empty and removes from Firestore.
      */
-    fun clearSlot(slotIndex: Int) {
+    fun clearSlot(slotIndex: Int, userId: String = "") {
         if (slotIndex !in 0 until MAX_SLOTS) return
         val current = _slots.value.toMutableList()
         current[slotIndex] = PhotoSlotState.Empty
         _slots.value = current
+        if (userId.isNotEmpty()) {
+            scope.launch {
+                repository.removePhotoSlot(userId, slotIndex)
+            }
+        }
     }
 
     /**
