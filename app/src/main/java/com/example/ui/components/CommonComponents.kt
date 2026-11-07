@@ -240,28 +240,25 @@ fun LevelBadge(
 fun ExclusiveAccountBadge(modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                androidx.compose.ui.graphics.Brush.horizontalGradient(
-                    listOf(Color(0xFFFFD700), Color(0xFFFF2D55), Color(0xFF7B1FA2))
-                )
-            )
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF221E14))
+            .border(1.dp, Color(0xFFFFD700).copy(alpha = 0.85f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = Icons.Filled.Star,
-            contentDescription = "Exclusive",
-            tint = Color(0xFF121212),
-            modifier = Modifier.size(13.dp)
+            contentDescription = "Exclusive Admin Account",
+            tint = Color(0xFFFFD700),
+            modifier = Modifier.size(12.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = "Bondly Exclusive Account",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Black,
-            color = Color(0xFF121212),
-            letterSpacing = 0.5.sp
+            text = "EXCLUSIVE",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = Color(0xFFFFD700),
+            letterSpacing = 0.8.sp
         )
     }
 }

@@ -7,6 +7,7 @@ import com.google.firebase.firestore.ServerTimestamp
 @IgnoreExtraProperties
 data class UserProfile(
     val userId: String = "",
+    val memberId: String = "",
     val publicUserId: String = "",
     val displayName: String = "",
     val dob: String = "",
@@ -28,6 +29,7 @@ data class UserProfile(
     val accountStatus: String = "active", // "active", "suspended", "banned"
     val allowCallsFrom: String = "matches",
     val showOnlineStatus: Boolean = true,
+    val isOnline: Boolean = false,
     val isPremium: Boolean = false,
     val userLevel: Int = 1,
     val activeDaysCount: Int = 1,
@@ -40,7 +42,16 @@ data class UserProfile(
 ) {
     val isAdmin: Boolean get() = role == "admin"
     val isExclusiveAccount: Boolean get() = role == "admin"
-    val isOnline: Boolean get() = showOnlineStatus
+    val effectiveMemberId: String get() = when {
+        memberId.isNotBlank() -> memberId
+        publicUserId.isNotBlank() -> publicUserId
+        else -> ""
+    }
+    val isCurrentlyOnline: Boolean get() = isOnline && (lastActiveAt == null || (System.currentTimeMillis() - lastActiveAt.toDate().time) < 90_000L)
+    fun isVisibleOnlineTo(viewerIsAdmin: Boolean = false): Boolean {
+        if (!viewerIsAdmin && !showOnlineStatus) return false
+        return isCurrentlyOnline
+    }
     val mobileNumber: String get() = maskedMobileNumber
 }
 
@@ -212,14 +223,27 @@ data class AdminMessageDeliveryReport(
 
 @IgnoreExtraProperties
 data class PublicUserIndex(
+    val memberId: String = "",
     val publicUserId: String = "",
     val userId: String = "",
     val displayName: String = "",
     val city: String = "",
+    val state: String = "",
+    val bio: String = "",
+    val interests: List<String> = emptyList(),
     val gender: String = "",
     val age: Int = 0,
-    val photoUrl: String = ""
-)
+    val photoUrl: String = "",
+    val isOnline: Boolean = false,
+    val lastActiveAt: Timestamp? = null
+) {
+    val displayMemberId: String get() = when {
+        memberId.isNotBlank() -> memberId
+        publicUserId.isNotBlank() -> publicUserId
+        else -> ""
+    }
+    val isCurrentlyOnline: Boolean get() = isOnline && (lastActiveAt == null || (System.currentTimeMillis() - lastActiveAt.toDate().time) < 120_000L)
+}
 
 @IgnoreExtraProperties
 data class UserSession(

@@ -27,7 +27,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -38,8 +37,11 @@ import com.example.data.upload.ProfilePhotoUploadManager
 import com.example.ui.components.PrimaryButton
 import com.example.ui.components.SecondaryButton
 import com.example.ui.theme.*
+import com.example.util.AllIndianStatesAndUTs
+import com.example.util.AvailableHobbies
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Calendar
 import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -65,18 +67,23 @@ fun OnboardingProfileScreen(
     val photoSlots by uploadManager.slots.collectAsState()
     val isSequentialUploading by uploadManager.isSequentialUploading.collectAsState()
 
-    var currentStep by remember { mutableIntStateOf(1) } // 1: Personal, 2: Mobile, 3: Photos, 4: Bio/Hobbies, 5: Rules
+    var currentStep by remember { mutableIntStateOf(1) } // 1: Personal Info & Hobbies, 2: Mobile, 3: Photos (5 Slots), 4: Rules & Finish
 
-    // Step 1: Personal
+    // Step 1: Personal Info & Hobbies
     var fullName by remember { mutableStateOf(initialProfile?.displayName ?: "") }
     var birthDay by remember { mutableStateOf("15") }
     var birthMonth by remember { mutableStateOf("08") }
     var birthYear by remember { mutableStateOf("2000") }
     // REQUIREMENT: No gender option selected by default! Must be manually chosen.
     var gender by remember { mutableStateOf(initialProfile?.gender ?: "") }
-    var selectedState by remember { mutableStateOf(initialProfile?.state ?: "Maharashtra") }
-    var city by remember { mutableStateOf(initialProfile?.city ?: "Mumbai") }
+    var selectedState by remember { mutableStateOf(initialProfile?.state.takeIf { !it.isNullOrBlank() } ?: "Maharashtra") }
+    var city by remember { mutableStateOf(initialProfile?.city ?: "") }
     var stateDropdownExpanded by remember { mutableStateOf(false) }
+    var bio by remember { mutableStateOf(initialProfile?.bio ?: "") }
+    var selectedHobbies by remember {
+        mutableStateOf(initialProfile?.interests?.toSet() ?: emptySet())
+    }
+    var datingPreference by remember { mutableStateOf(initialProfile?.datingPreference ?: "Everyone") }
 
     // Step 2: In-App Mobile Confirmation State (No hardcoded OTPs!)
     var mobileNumber by remember { mutableStateOf(initialProfile?.maskedMobileNumber ?: "") }
@@ -137,16 +144,7 @@ fun OnboardingProfileScreen(
         }
     }
 
-    // Step 4: Bio & Hobbies
-    var bio by remember { mutableStateOf(initialProfile?.bio ?: "") }
-    var selectedHobbies by remember {
-        mutableStateOf(
-            initialProfile?.interests?.toSet() ?: setOf("Chai & Conversations", "Bollywood", "Music & Concerts")
-        )
-    }
-    var datingPreference by remember { mutableStateOf(initialProfile?.datingPreference ?: "Everyone") }
-
-    // Step 5: Rules & Saving
+    // Step 4: Rules & Saving
     var hasAcceptedRules by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -173,7 +171,7 @@ fun OnboardingProfileScreen(
                             color = TextWhite
                         )
                         Text(
-                            text = "Step $currentStep of 5",
+                            text = "Step $currentStep of 4",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = BondlyPink
@@ -181,7 +179,7 @@ fun OnboardingProfileScreen(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     LinearProgressIndicator(
-                        progress = { currentStep / 5f },
+                        progress = { currentStep / 4f },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
@@ -197,28 +195,34 @@ fun OnboardingProfileScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(20.dp),
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Box(modifier = Modifier.weight(1f)) {
                     when (currentStep) {
                         1 -> {
                             // =========================================================================
-                            // STEP 1: PERSONAL INFORMATION (WITH MANDATORY GENDER SELECTION)
+                            // STEP 1: PERSONAL INFORMATION & HOBBIES (MANDATORY GENDER, AGE >= 18, 36 STATES/UTs)
                             // =========================================================================
-                            LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxSize()
+                            ) {
                                 item {
-                                    Text("Tell us about yourself", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                                    Text("This information will help matches find you.", fontSize = 13.sp, color = TextMuted)
+                                    Text("Personal Details", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
+                                    Text("Tell us about yourself to help compatible members find you.", fontSize = 13.sp, color = TextMuted)
                                 }
 
                                 item {
-                                    Text("Your Name", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                                    Text("Full Name", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
                                     Spacer(modifier = Modifier.height(6.dp))
                                     OutlinedTextField(
                                         value = fullName,
-                                        onValueChange = { fullName = it },
-                                        placeholder = { Text("First and last name", color = TextMuted) },
+                                        onValueChange = {
+                                            fullName = it
+                                            errorMessage = null
+                                        },
+                                        placeholder = { Text("Enter your full name", color = TextMuted) },
                                         modifier = Modifier.fillMaxWidth().testTag("onboarding_name_input"),
                                         shape = RoundedCornerShape(14.dp),
                                         colors = OutlinedTextFieldDefaults.colors(
@@ -233,7 +237,7 @@ fun OnboardingProfileScreen(
                                 }
 
                                 item {
-                                    Text("Birth Date (DD / MM / YYYY)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                                    Text("Date of Birth (Must be 18+)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                         OutlinedTextField(
@@ -289,7 +293,7 @@ fun OnboardingProfileScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("Gender", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("(Required • Select your gender)", fontSize = 11.sp, color = TextMuted)
+                                        Text("(Required • Tap to select)", fontSize = 11.sp, color = TextMuted)
                                     }
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Row(
@@ -346,15 +350,19 @@ fun OnboardingProfileScreen(
                                     }
                                 }
 
+                                // Location: City & State (All 28 States + 8 UTs)
                                 item {
-                                    Text("City & State", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                                    Text("City & State (28 States + 8 UTs)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                                         OutlinedTextField(
                                             value = city,
-                                            onValueChange = { city = it },
-                                            placeholder = { Text("City", color = TextMuted) },
-                                            modifier = Modifier.weight(1f),
+                                            onValueChange = {
+                                                city = it
+                                                errorMessage = null
+                                            },
+                                            placeholder = { Text("City (e.g. Mumbai)", color = TextMuted) },
+                                            modifier = Modifier.weight(1f).testTag("onboarding_city_input"),
                                             shape = RoundedCornerShape(14.dp),
                                             colors = OutlinedTextFieldDefaults.colors(
                                                 focusedContainerColor = CharcoalCard,
@@ -365,13 +373,17 @@ fun OnboardingProfileScreen(
                                                 unfocusedTextColor = TextWhite
                                             )
                                         )
-                                        Box(modifier = Modifier.weight(1f)) {
+                                        Box(modifier = Modifier.weight(1.2f)) {
                                             OutlinedTextField(
                                                 value = selectedState,
                                                 onValueChange = {},
                                                 readOnly = true,
-                                                trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = TextLightGrey) },
-                                                modifier = Modifier.fillMaxWidth().clickable { stateDropdownExpanded = true },
+                                                trailingIcon = {
+                                                    IconButton(onClick = { stateDropdownExpanded = true }) {
+                                                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Select State", tint = TextLightGrey)
+                                                    }
+                                                },
+                                                modifier = Modifier.fillMaxWidth().clickable { stateDropdownExpanded = true }.testTag("onboarding_state_selector"),
                                                 shape = RoundedCornerShape(14.dp),
                                                 colors = OutlinedTextFieldDefaults.colors(
                                                     focusedContainerColor = CharcoalCard,
@@ -385,9 +397,11 @@ fun OnboardingProfileScreen(
                                             DropdownMenu(
                                                 expanded = stateDropdownExpanded,
                                                 onDismissRequest = { stateDropdownExpanded = false },
-                                                modifier = Modifier.background(CharcoalCard)
+                                                modifier = Modifier
+                                                    .background(CharcoalCardElevated)
+                                                    .heightIn(max = 300.dp)
                                             ) {
-                                                IndianStates.forEach { st ->
+                                                AllIndianStatesAndUTs.forEach { st ->
                                                     DropdownMenuItem(
                                                         text = { Text(st, color = TextWhite) },
                                                         onClick = {
@@ -395,6 +409,71 @@ fun OnboardingProfileScreen(
                                                             stateDropdownExpanded = false
                                                         }
                                                     )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Bio
+                                item {
+                                    Text("About You (Bio)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    OutlinedTextField(
+                                        value = bio,
+                                        onValueChange = {
+                                            bio = it
+                                            errorMessage = null
+                                        },
+                                        placeholder = { Text("Write a fun summary about yourself...", color = TextMuted) },
+                                        modifier = Modifier.fillMaxWidth().height(90.dp).testTag("onboarding_bio_input"),
+                                        shape = RoundedCornerShape(14.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedContainerColor = CharcoalCard,
+                                            unfocusedContainerColor = CharcoalCard,
+                                            focusedBorderColor = BondlyPink,
+                                            unfocusedBorderColor = CharcoalBorder,
+                                            focusedTextColor = TextWhite,
+                                            unfocusedTextColor = TextWhite
+                                        )
+                                    )
+                                }
+
+                                // Hobbies: At least 3 required
+                                item {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Hobbies & Interests", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "(Select at least 3 • Selected: ${selectedHobbies.size})",
+                                            fontSize = 11.sp,
+                                            color = if (selectedHobbies.size >= 3) OnlineGreen else WarningOrange
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        AvailableHobbies.forEach { hobby ->
+                                            val isSel = selectedHobbies.contains(hobby)
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .background(if (isSel) BondlyPink.copy(alpha = 0.25f) else CharcoalCard)
+                                                    .border(1.dp, if (isSel) BondlyPink else CharcoalBorder, RoundedCornerShape(12.dp))
+                                                    .clickable {
+                                                        selectedHobbies = if (isSel) selectedHobbies - hobby else selectedHobbies + hobby
+                                                        errorMessage = null
+                                                    }
+                                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                            ) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    if (isSel) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, tint = BondlyPink, modifier = Modifier.size(12.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                    }
+                                                    Text(hobby, fontSize = 12.sp, color = if (isSel) BondlyPink else TextLightGrey)
                                                 }
                                             }
                                         }
@@ -410,7 +489,7 @@ fun OnboardingProfileScreen(
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 Text("Mobile Number Confirmation", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
                                 Text(
-                                    "Used for account recovery and profile safety on Bondly. This in-app confirmation validates your entered number.",
+                                    "Used for account safety and recovery on Bondly. This in-app confirmation validates your entered number.",
                                     fontSize = 13.sp,
                                     color = TextMuted
                                 )
@@ -468,7 +547,6 @@ fun OnboardingProfileScreen(
                                         text = if (generatedOtpCode == null) "Generate In-App Confirmation Code" else "Resend Code (${if (otpCooldownSeconds > 0) "${otpCooldownSeconds}s" else "Ready"})",
                                         enabled = mobileNumber.trim().length >= 10 && otpCooldownSeconds == 0,
                                         onClick = {
-                                            // Generate fresh random 6-digit code
                                             val freshCode = Random.nextInt(100000, 999999).toString()
                                             generatedOtpCode = freshCode
                                             otpExpiryTimestamp = System.currentTimeMillis() + (120 * 1000L) // 2 minutes
@@ -591,7 +669,7 @@ fun OnboardingProfileScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text("5 Profile Photos (Mandatory)", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                                        Text("Select all 5 together or one by one. Uploads happen sequentially.", fontSize = 12.sp, color = TextMuted)
+                                        Text("Select all 5 together or one by one. Direct upload via ImgBB.", fontSize = 12.sp, color = TextMuted)
                                     }
                                 }
 
@@ -630,7 +708,7 @@ fun OnboardingProfileScreen(
                                             )
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Text(
-                                                text = "Uploading photos sequentially in background... You can proceed to next steps.",
+                                                text = "Uploading photos directly to ImgBB and confirming with server...",
                                                 fontSize = 11.sp,
                                                 color = TextLightGrey
                                             )
@@ -690,7 +768,6 @@ fun OnboardingProfileScreen(
                                                 // State Overlays
                                                 when (slotState) {
                                                     is PhotoSlotState.Uploading -> {
-                                                        // Circular rotating buffering/loading animation directly over the image
                                                         Box(
                                                             modifier = Modifier
                                                                 .fillMaxSize()
@@ -721,7 +798,6 @@ fun OnboardingProfileScreen(
                                                     }
 
                                                     is PhotoSlotState.Success -> {
-                                                        // Small success indicator checkmark
                                                         Surface(
                                                             modifier = Modifier
                                                                 .align(Alignment.BottomEnd)
@@ -737,7 +813,6 @@ fun OnboardingProfileScreen(
                                                     }
 
                                                     is PhotoSlotState.Failed -> {
-                                                        // Error overlay with Retry
                                                         Box(
                                                             modifier = Modifier
                                                                 .fillMaxSize()
@@ -769,7 +844,6 @@ fun OnboardingProfileScreen(
                                                     }
                                                 }
                                             } else {
-                                                // Empty Slot Placeholder
                                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                                     Icon(Icons.Filled.AddAPhoto, contentDescription = null, tint = TextMuted, modifier = Modifier.size(24.dp))
                                                     Spacer(modifier = Modifier.height(4.dp))
@@ -779,73 +853,23 @@ fun OnboardingProfileScreen(
                                         }
                                     }
                                 }
+
+                                val uploadedCount = uploadManager.countSuccessful()
+                                Text(
+                                    text = if (uploadedCount == 5) "All 5 photos successfully uploaded and verified with server." else "$uploadedCount / 5 photos uploaded. All 5 are required.",
+                                    fontSize = 12.sp,
+                                    color = if (uploadedCount == 5) OnlineGreen else TextMuted
+                                )
                             }
                         }
 
                         4 -> {
                             // =========================================================================
-                            // STEP 4: BIO & HOBBIES
-                            // =========================================================================
-                            LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                item {
-                                    Text("About & Lifestyle", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                                    Text("Express your personality and who you want to meet.", fontSize = 13.sp, color = TextMuted)
-                                }
-
-                                item {
-                                    Text("About You (Bio)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    OutlinedTextField(
-                                        value = bio,
-                                        onValueChange = { bio = it },
-                                        placeholder = { Text("Write a fun summary about yourself...", color = TextMuted) },
-                                        modifier = Modifier.fillMaxWidth().height(100.dp).testTag("onboarding_bio_input"),
-                                        shape = RoundedCornerShape(14.dp),
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedContainerColor = CharcoalCard,
-                                            unfocusedContainerColor = CharcoalCard,
-                                            focusedBorderColor = BondlyPink,
-                                            unfocusedBorderColor = CharcoalBorder,
-                                            focusedTextColor = TextWhite,
-                                            unfocusedTextColor = TextWhite
-                                        )
-                                    )
-                                }
-
-                                item {
-                                    Text("Select Hobbies & Passions", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = BondlyPink)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        AvailableHobbies.forEach { hobby ->
-                                            val isSel = selectedHobbies.contains(hobby)
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .background(if (isSel) BondlyPink.copy(alpha = 0.2f) else CharcoalCard)
-                                                    .border(1.dp, if (isSel) BondlyPink else CharcoalBorder, RoundedCornerShape(12.dp))
-                                                    .clickable {
-                                                        selectedHobbies = if (isSel) selectedHobbies - hobby else selectedHobbies + hobby
-                                                    }
-                                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                                            ) {
-                                                Text(hobby, fontSize = 12.sp, color = if (isSel) BondlyPink else TextLightGrey)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        5 -> {
-                            // =========================================================================
-                            // STEP 5: RULES & FINAL VALIDATION
+                            // STEP 4: COMMUNITY RULES & FINAL ACTIVATION
                             // =========================================================================
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 Text("Bondly Community Code", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                                Text("To create a secure and respectful dating environment, all members agree to the following standards:", fontSize = 13.sp, color = TextMuted)
+                                Text("To ensure a respectful and secure space, all members agree to the following standards:", fontSize = 13.sp, color = TextMuted)
 
                                 Card(
                                     shape = RoundedCornerShape(16.dp),
@@ -854,9 +878,9 @@ fun OnboardingProfileScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        RuleItem("1. Zero Tolerance for Harassment", "Inappropriate messages, unsolicited content, and hate speech lead to permanent bans.")
-                                        RuleItem("2. Keep Communications on Bondly", "Do not share phone numbers, social handles, or UPI details in public bios or initial chats.")
-                                        RuleItem("3. Mutual Consent & Respect", "Calling features unlock as you build genuine activity. Respect your partner's boundaries at all times.")
+                                        RuleItem("1. Zero Tolerance for Harassment", "Inappropriate messages, unsolicited media, and hate speech lead to permanent immediate bans.")
+                                        RuleItem("2. Keep Communications on Bondly", "Do not share phone numbers, social handles, or UPI links in public bios.")
+                                        RuleItem("3. Mutual Consent & Respect", "Calling features unlock as you build genuine interaction. Respect each other's boundaries at all times.")
                                     }
                                 }
 
@@ -880,7 +904,7 @@ fun OnboardingProfileScreen(
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Text(
-                                            text = if (uploadedCount == 5) "All 5 photos successfully uploaded!" else "Photos uploaded: $uploadedCount of 5 (All 5 required)",
+                                            text = if (uploadedCount == 5) "All 5 photos successfully verified on server!" else "Photos uploaded: $uploadedCount of 5 (All 5 required)",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             color = TextWhite
@@ -944,26 +968,56 @@ fun OnboardingProfileScreen(
                         }
 
                         PrimaryButton(
-                            text = if (currentStep == 5) "Finish & Start Bonding" else "Next",
+                            text = if (currentStep == 4) "Finish & Start Bonding" else "Next",
                             isLoading = isSaving,
                             onClick = {
                                 when (currentStep) {
                                     1 -> {
                                         if (fullName.isBlank()) {
-                                            errorMessage = "Please enter your full name"
+                                            errorMessage = "Please enter your full name."
                                             return@PrimaryButton
                                         }
+
+                                        val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+                                        val y = birthYear.toIntOrNull() ?: 2000
+                                        val calculatedAge = currentYear - y
+                                        if (calculatedAge < 18) {
+                                            errorMessage = "You must be at least 18 years old to join Bondly."
+                                            return@PrimaryButton
+                                        }
+
                                         if (gender.isBlank()) {
                                             errorMessage = "Please manually select your gender to proceed."
                                             return@PrimaryButton
                                         }
+
+                                        if (city.isBlank()) {
+                                            errorMessage = "Please enter your city."
+                                            return@PrimaryButton
+                                        }
+
+                                        if (selectedState.isBlank()) {
+                                            errorMessage = "Please select your state."
+                                            return@PrimaryButton
+                                        }
+
+                                        if (bio.trim().length < 5) {
+                                            errorMessage = "Please write a short bio about yourself (at least 5 characters)."
+                                            return@PrimaryButton
+                                        }
+
+                                        if (selectedHobbies.size < 3) {
+                                            errorMessage = "Please select at least 3 hobbies or interests (currently ${selectedHobbies.size})."
+                                            return@PrimaryButton
+                                        }
+
                                         errorMessage = null
                                         currentStep = 2
                                     }
 
                                     2 -> {
                                         if (mobileNumber.trim().length < 10) {
-                                            errorMessage = "Please enter a valid mobile number (at least 10 digits)"
+                                            errorMessage = "Please enter a valid mobile number (at least 10 digits)."
                                             return@PrimaryButton
                                         }
                                         if (!isMobileConfirmed) {
@@ -975,31 +1029,28 @@ fun OnboardingProfileScreen(
                                     }
 
                                     3 -> {
-                                        // Allow continuing if user wants to fill bio while photos upload in background!
+                                        if (isSequentialUploading) {
+                                            errorMessage = "Photos are currently uploading. Please wait for them to finish."
+                                            return@PrimaryButton
+                                        }
+                                        val count = uploadManager.countSuccessful()
+                                        if (count < 5) {
+                                            errorMessage = "All 5 photo slots must be successfully uploaded before proceeding (currently $count / 5)."
+                                            return@PrimaryButton
+                                        }
                                         errorMessage = null
                                         currentStep = 4
                                     }
 
                                     4 -> {
-                                        errorMessage = null
-                                        currentStep = 5
-                                    }
-
-                                    5 -> {
                                         if (!hasAcceptedRules) {
                                             errorMessage = "You must accept the Community Rules to continue."
                                             return@PrimaryButton
                                         }
 
-                                        // Strict Requirement: Exactly 5 successfully uploaded photos are required!
-                                        if (isSequentialUploading) {
-                                            errorMessage = "Photos are still uploading in the background. Please wait a moment..."
-                                            return@PrimaryButton
-                                        }
-
                                         if (!uploadManager.allUploaded()) {
                                             val currentUploaded = uploadManager.countSuccessful()
-                                            errorMessage = "All 5 photo slots must be successfully uploaded. (Currently $currentUploaded / 5 completed). Go back to Step 3 to review."
+                                            errorMessage = "All 5 photo slots must be successfully uploaded (currently $currentUploaded / 5 completed)."
                                             return@PrimaryButton
                                         }
 
@@ -1017,12 +1068,14 @@ fun OnboardingProfileScreen(
                                         isSaving = true
                                         coroutineScope.launch {
                                             try {
-                                                val uniquePublicId = repository.allocateUniquePublicId(currentUserId)
-                                                val ageInt = (2026 - (birthYear.toIntOrNull() ?: 2000)).coerceAtLeast(18)
+                                                val uniqueMemberId = repository.allocateUniqueMemberId(currentUserId)
+                                                val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+                                                val ageInt = (currentYear - (birthYear.toIntOrNull() ?: 2000)).coerceAtLeast(18)
 
                                                 val profileToSave = (initialProfile ?: UserProfile()).copy(
                                                     userId = currentUserId,
-                                                    publicUserId = uniquePublicId,
+                                                    memberId = uniqueMemberId,
+                                                    publicUserId = uniqueMemberId,
                                                     displayName = fullName.trim(),
                                                     age = ageInt,
                                                     gender = gender.trim(),
@@ -1101,7 +1154,7 @@ fun OnboardingProfileScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text("Bondly In-App Code", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                                Text("Demo confirmation (Enter below)", fontSize = 10.sp, color = TextMuted)
+                                Text("Enter the code below to confirm your number", fontSize = 10.sp, color = TextMuted)
                             }
                         }
 

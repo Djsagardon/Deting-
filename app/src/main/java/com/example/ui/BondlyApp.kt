@@ -27,8 +27,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.*
 import com.example.data.repository.BondlyRepository
+import androidx.compose.ui.text.font.FontWeight
 import com.example.ui.components.IncomingCallDialog
 import com.example.ui.components.NoInternetScreen
+import com.example.ui.components.PrimaryButton
+import androidx.compose.material.icons.filled.Warning
 import com.example.ui.screens.*
 import com.example.ui.theme.*
 import com.example.util.NetworkConnectivityManager
@@ -168,12 +171,37 @@ private fun AuthenticatedAppContent(
         }
     }
 
-    val currentProfile by repository.observeProfile(currentUserId).collectAsState(initial = null)
+    val profileState by repository.observeProfileState(currentUserId).collectAsState(initial = UserProfileState.Loading)
     val incomingCall by repository.observeIncomingCalls().collectAsState(initial = null)
+
+    // Accurate real-time online presence management
+    DisposableEffect(currentUserId, isOnline) {
+        if (isOnline && currentUserId.isNotEmpty()) {
+            coroutineScope.launch {
+                repository.setUserOnline(true)
+            }
+        }
+        onDispose {
+            if (currentUserId.isNotEmpty()) {
+                coroutineScope.launch {
+                    repository.setUserOnline(false)
+                }
+            }
+        }
+    }
+
+    // Live heartbeat every 45s while user is active
+    LaunchedEffect(currentUserId, isOnline) {
+        while (isOnline && currentUserId.isNotEmpty()) {
+            kotlinx.coroutines.delay(45_000L)
+            repository.setUserOnline(true)
+        }
+    }
 
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Main) }
     val screenStack = remember { mutableStateListOf<Screen>() }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Discover, 1: Matches, 2: Alerts, 3: Profile
+    var pendingChatPartnerUid by remember { mutableStateOf<String?>(null) }
 
     fun navigateTo(screen: Screen) {
         screenStack.add(currentScreen)
@@ -216,6 +244,8 @@ private fun AuthenticatedAppContent(
         pendingCallParams = null
     }
 
+    val currentProfile = (profileState as? UserProfileState.Loaded)?.profile
+
     fun handleStartCall(targetUid: String, targetName: String, isVideo: Boolean) {
         if (!NetworkConnectivityManager.isConnected()) {
             Toast.makeText(context, "No internet connection. Please connect to the internet and try again.", Toast.LENGTH_SHORT).show()
@@ -249,19 +279,65 @@ private fun AuthenticatedAppContent(
         callPermissionLauncher.launch(perms)
     }
 
-    // Check for mandatory profile completion
-    val profile = currentProfile
-    if (profile != null && !profile.profileCompleted) {
-        OnboardingProfileScreen(
-            currentUserId = currentUserId,
-            repository = repository,
-            initialProfile = profile,
-            onProfileCreated = {
-                currentScreen = Screen.Main
-                selectedTab = 0
+    // STRICT MANDATORY PROFILE SETUP GATING: Never allow new/incomplete profiles to bypass onboarding!
+    when (val state = profileState) {
+        is UserProfileState.Loading -> {
+            Box(
+                modifier = Modifier.fillMaxSize().background(CharcoalDark),
+                contentAlignment = androidx.compose.ui.Alignment.Center
+            ) {
+                Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = BondlyPink, strokeWidth = 3.dp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Connecting to Bondly...", color = TextWhite, fontSize = 14.sp)
+                }
             }
-        )
-        return
+            return
+        }
+        is UserProfileState.NotFound -> {
+            OnboardingProfileScreen(
+                currentUserId = currentUserId,
+                repository = repository,
+                initialProfile = null,
+                onProfileCreated = {
+                    currentScreen = Screen.Main
+                    selectedTab = 0
+                }
+            )
+            return
+        }
+        is UserProfileState.Incomplete -> {
+            OnboardingProfileScreen(
+                currentUserId = currentUserId,
+                repository = repository,
+                initialProfile = state.profile,
+                onProfileCreated = {
+                    currentScreen = Screen.Main
+                    selectedTab = 0
+                }
+            )
+            return
+        }
+        is UserProfileState.Error -> {
+            Box(
+                modifier = Modifier.fillMaxSize().background(CharcoalDark).padding(24.dp),
+                contentAlignment = androidx.compose.ui.Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Filled.Warning, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(48.dp))
+                    Text("Could not load profile", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(state.message, color = TextMuted, fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    PrimaryButton(text = "Retry", onClick = { refreshTrigger++ })
+                }
+            }
+            return
+        }
+        is UserProfileState.Loaded -> {
+            // Profile is fully completed, continue to Main scaffold
+        }
     }
 
     // Incoming Call Dialog
@@ -416,7 +492,8 @@ private fun AuthenticatedAppContent(
                             repository = repository,
                             onNavigateToSearchById = { navigateTo(Screen.SearchById) },
                             onNavigateToProfileDetails = { uid -> navigateTo(Screen.PublicProfile(uid)) },
-                            onNavigateToChat = {
+                            onNavigateToChat = { targetUid ->
+                                pendingChatPartnerUid = targetUid
                                 selectedTab = 1
                             },
                             onStartCall = { targetUid, targetName, isVideo ->
@@ -432,7 +509,9 @@ private fun AuthenticatedAppContent(
                             },
                             onNavigateToPublicProfile = { uid ->
                                 navigateTo(Screen.PublicProfile(uid))
-                            }
+                            },
+                            initialPartnerUid = pendingChatPartnerUid,
+                            onClearInitialPartner = { pendingChatPartnerUid = null }
                         )
                         2 -> NotificationsScreen(
                             currentUserId = currentUserId,
@@ -473,6 +552,11 @@ private fun AuthenticatedAppContent(
                         },
                         onReportUser = { targetUid, targetName ->
                             navigateTo(Screen.ReportUser(targetUid, targetName))
+                        },
+                        onNavigateToChat = { targetUid ->
+                            pendingChatPartnerUid = targetUid
+                            selectedTab = 1
+                            currentScreen = Screen.Main
                         }
                     )
                 }

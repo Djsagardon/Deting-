@@ -38,10 +38,13 @@ fun PublicProfileScreen(
     repository: BondlyRepository,
     onBack: () -> Unit,
     onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit,
-    onReportUser: (targetUid: String, targetName: String) -> Unit
+    onReportUser: (targetUid: String, targetName: String) -> Unit,
+    onNavigateToChat: ((String) -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val targetProfile by repository.observeProfile(targetUserId).collectAsState(initial = null)
+    val currentUserProfile by repository.observeProfile(currentUserId).collectAsState(initial = null)
+    val isCurrentAdmin = currentUserProfile?.isAdmin == true
     val incomingRequest by repository.observeMatchRequest(senderUid = targetUserId, receiverUid = currentUserId).collectAsState(initial = null)
     val existingMatch by repository.observeMatchBetween(currentUserId, targetUserId).collectAsState(initial = null)
     var likeSent by remember { mutableStateOf(false) }
@@ -312,8 +315,72 @@ fun PublicProfileScreen(
                                 Spacer(modifier = Modifier.height(10.dp))
                             }
 
-                            if (isPendingRequest) {
-                                // CASE 1: INCOMING MATCH REQUEST PENDING
+                            if (isCurrentAdmin) {
+                                // ADMIN EXCLUSIVE PRIVILEGE: UNCONDITIONAL MESSAGING & CALLING
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    ExclusiveAccountBadge()
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "Admin Access: Direct Unconditional Communication",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = BondlyGold
+                                    )
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceEvenly,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // Direct Chat
+                                        IconButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    val res = repository.getOrCreateAdminMatch(profile.userId)
+                                                    res.onSuccess {
+                                                        onNavigateToChat?.invoke(profile.userId)
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(CircleShape)
+                                                .background(CharcoalCardElevated)
+                                                .border(1.5.dp, BondlyPink, CircleShape)
+                                        ) {
+                                            Icon(Icons.Filled.Chat, contentDescription = "Direct Message", tint = BondlyPink, modifier = Modifier.size(24.dp))
+                                        }
+
+                                        // Direct Voice Call
+                                        IconButton(
+                                            onClick = { onStartCall(profile.userId, profile.displayName, false) },
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(CircleShape)
+                                                .background(CharcoalCardElevated)
+                                                .border(1.5.dp, OnlineGreen, CircleShape)
+                                        ) {
+                                            Icon(Icons.Filled.Call, contentDescription = "Voice Call", tint = OnlineGreen, modifier = Modifier.size(26.dp))
+                                        }
+
+                                        // Direct Video Call
+                                        IconButton(
+                                            onClick = { onStartCall(profile.userId, profile.displayName, true) },
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(CircleShape)
+                                                .background(CharcoalCardElevated)
+                                                .border(1.5.dp, SuperLikeBlue, CircleShape)
+                                        ) {
+                                            Icon(Icons.Filled.Videocam, contentDescription = "Video Call", tint = SuperLikeBlue, modifier = Modifier.size(26.dp))
+                                        }
+                                    }
+                                }
+                            } else if (isPendingRequest) {
+                                // CASE 2: INCOMING MATCH REQUEST PENDING
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
                                     color = BondlyPink.copy(alpha = 0.15f),
@@ -392,7 +459,7 @@ fun PublicProfileScreen(
                                     }
                                 }
                             } else if (isMatched) {
-                                // CASE 2: CONFIRMED MUTUAL MATCH
+                                // CASE 3: MUTUALLY MATCHED MEMBERS
                                 Row(
                                     modifier = Modifier.padding(bottom = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -407,130 +474,102 @@ fun PublicProfileScreen(
                                     horizontalArrangement = Arrangement.SpaceEvenly,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    // Send Message
+                                    IconButton(
+                                        onClick = { onNavigateToChat?.invoke(profile.userId) },
+                                        modifier = Modifier
+                                            .size(54.dp)
+                                            .clip(CircleShape)
+                                            .background(CharcoalCardElevated)
+                                            .border(1.5.dp, BondlyPink, CircleShape)
+                                    ) {
+                                        Icon(Icons.Filled.Chat, contentDescription = "Chat", tint = BondlyPink, modifier = Modifier.size(24.dp))
+                                    }
+
                                     // Voice Call
                                     IconButton(
                                         onClick = { onStartCall(profile.userId, profile.displayName, false) },
                                         modifier = Modifier
-                                            .size(56.dp)
+                                            .size(54.dp)
                                             .clip(CircleShape)
                                             .background(CharcoalCardElevated)
                                             .border(1.5.dp, OnlineGreen, CircleShape)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Call,
-                                            contentDescription = "Voice Call",
-                                            tint = OnlineGreen,
-                                            modifier = Modifier.size(28.dp)
-                                        )
+                                        Icon(Icons.Filled.Call, contentDescription = "Voice Call", tint = OnlineGreen, modifier = Modifier.size(26.dp))
                                     }
 
                                     // Video Call
                                     IconButton(
                                         onClick = { onStartCall(profile.userId, profile.displayName, true) },
                                         modifier = Modifier
-                                            .size(56.dp)
+                                            .size(54.dp)
                                             .clip(CircleShape)
                                             .background(CharcoalCardElevated)
                                             .border(1.5.dp, SuperLikeBlue, CircleShape)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Videocam,
-                                            contentDescription = "Video Call",
-                                            tint = SuperLikeBlue,
-                                            modifier = Modifier.size(28.dp)
-                                        )
+                                        Icon(Icons.Filled.Videocam, contentDescription = "Video Call", tint = SuperLikeBlue, modifier = Modifier.size(26.dp))
                                     }
                                 }
                             } else {
-                                // CASE 3: STANDARD PROFILE BROWSING
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceEvenly,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // Reject / Pass Button
-                                    IconButton(
-                                        onClick = {
-                                            coroutineScope.launch {
-                                                repository.rejectUser(profile.userId)
-                                                actionFeedback = "Passed profile"
-                                                likeSent = false
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(CircleShape)
-                                            .background(CharcoalCardElevated)
-                                            .border(1.5.dp, CharcoalBorder, CircleShape)
+                                // CASE 4: UNMATCHED REGULAR MEMBER BROWSING
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceEvenly,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Close,
-                                            contentDescription = "Pass",
-                                            tint = TextMuted,
-                                            modifier = Modifier.size(26.dp)
-                                        )
-                                    }
-
-                                    // Match / Like Button
-                                    IconButton(
-                                        onClick = {
-                                            coroutineScope.launch {
-                                                val matchRes = repository.sendLike(profile.userId)
-                                                matchRes.onSuccess { mutual ->
-                                                    likeSent = true
-                                                    actionFeedback = if (mutual) "It's a Mutual Match! 🎉" else "Match request sent! 💖"
-                                                }.onFailure { err ->
-                                                    actionFeedback = err.localizedMessage ?: "Failed to send request"
+                                        // Pass Button
+                                        IconButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    repository.rejectUser(profile.userId)
+                                                    actionFeedback = "Passed profile"
+                                                    likeSent = false
                                                 }
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(CircleShape)
-                                            .background(if (likeSent) BondlyPink else CharcoalCardElevated)
-                                            .border(1.5.dp, BondlyPink, CircleShape)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Favorite,
-                                            contentDescription = "Match Profile",
-                                            tint = if (likeSent) TextWhite else BondlyPink,
-                                            modifier = Modifier.size(28.dp)
-                                        )
+                                            },
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(CircleShape)
+                                                .background(CharcoalCardElevated)
+                                                .border(1.5.dp, CharcoalBorder, CircleShape)
+                                        ) {
+                                            Icon(Icons.Filled.Close, contentDescription = "Pass", tint = TextMuted, modifier = Modifier.size(24.dp))
+                                        }
+
+                                        // Match / Like Button
+                                        IconButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    val matchRes = repository.sendLike(profile.userId)
+                                                    matchRes.onSuccess { mutual ->
+                                                        likeSent = true
+                                                        actionFeedback = if (mutual) "It's a Mutual Match! 🎉" else "Match request sent! 💖"
+                                                    }.onFailure { err ->
+                                                        actionFeedback = err.localizedMessage ?: "Failed to send request"
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .size(56.dp)
+                                                .clip(CircleShape)
+                                                .background(if (likeSent) BondlyPink else CharcoalCardElevated)
+                                                .border(1.5.dp, BondlyPink, CircleShape)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Favorite,
+                                                contentDescription = "Match Profile",
+                                                tint = if (likeSent) TextWhite else BondlyPink,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
                                     }
 
-                                    // Voice Call
-                                    IconButton(
-                                        onClick = { onStartCall(profile.userId, profile.displayName, false) },
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(CircleShape)
-                                            .background(CharcoalCardElevated)
-                                            .border(1.5.dp, OnlineGreen, CircleShape)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Call,
-                                            contentDescription = "Voice Call",
-                                            tint = OnlineGreen,
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
-
-                                    // Video Call
-                                    IconButton(
-                                        onClick = { onStartCall(profile.userId, profile.displayName, true) },
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(CircleShape)
-                                            .background(CharcoalCardElevated)
-                                            .border(1.5.dp, SuperLikeBlue, CircleShape)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Videocam,
-                                            contentDescription = "Video Call",
-                                            tint = SuperLikeBlue,
-                                            modifier = Modifier.size(28.dp)
-                                        )
-                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text(
+                                        text = "🔒 Direct messaging and calls unlock once you both match",
+                                        fontSize = 11.sp,
+                                        color = TextMuted
+                                    )
                                 }
                             }
                         }

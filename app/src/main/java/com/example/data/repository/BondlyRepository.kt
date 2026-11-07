@@ -85,11 +85,79 @@ class BondlyRepository(
                         // Do not present stale cached data when offline
                         return@addSnapshotListener
                     }
-                    val profile = snapshot.toObject(UserProfile::class.java)
+                    val profile = snapshot.toObject(UserProfile::class.java)?.let { p ->
+                        val mId = snapshot.getString("memberId") ?: snapshot.getString("publicUserId") ?: ""
+                        p.copy(
+                            userId = if (p.userId.isNotBlank()) p.userId else snapshot.id,
+                            memberId = if (p.memberId.isNotBlank()) p.memberId else mId,
+                            publicUserId = if (p.publicUserId.isNotBlank()) p.publicUserId else mId
+                        )
+                    }
                     trySend(profile)
                 }
             }
         awaitClose { reg.remove() }
+    }
+
+    /**
+     * Observes live user profile lifecycle states: Loading, NotFound, Incomplete, Loaded, Error.
+     * Prevents uninitialized users from bypassing mandatory profile onboarding.
+     */
+    fun observeProfileState(uid: String = currentUid): Flow<UserProfileState> = callbackFlow {
+        if (uid.isEmpty()) {
+            trySend(UserProfileState.NotFound)
+            close()
+            return@callbackFlow
+        }
+        trySend(UserProfileState.Loading)
+        val reg = firestore.collection("users").document(uid)
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                if (error != null) {
+                    trySend(UserProfileState.Error(error.localizedMessage ?: "Failed to load user profile"))
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    trySend(UserProfileState.NotFound)
+                    return@addSnapshotListener
+                }
+                if (snapshot.metadata.isFromCache && !NetworkConnectivityManager.isConnected()) {
+                    return@addSnapshotListener
+                }
+                val profile = snapshot.toObject(UserProfile::class.java)?.let { p ->
+                    val mId = snapshot.getString("memberId") ?: snapshot.getString("publicUserId") ?: ""
+                    p.copy(
+                        userId = if (p.userId.isNotBlank()) p.userId else snapshot.id,
+                        memberId = if (p.memberId.isNotBlank()) p.memberId else mId,
+                        publicUserId = if (p.publicUserId.isNotBlank()) p.publicUserId else mId
+                    )
+                }
+                if (profile == null) {
+                    trySend(UserProfileState.NotFound)
+                } else if (!profile.profileCompleted) {
+                    trySend(UserProfileState.Incomplete(profile))
+                } else {
+                    trySend(UserProfileState.Loaded(profile))
+                }
+            }
+        awaitClose { reg.remove() }
+    }
+
+    /**
+     * Updates user presence status in Firestore.
+     */
+    suspend fun setUserOnline(isOnline: Boolean): Result<Unit> {
+        val uid = currentUid
+        if (uid.isEmpty()) return Result.success(Unit)
+        return try {
+            val updates = mapOf(
+                "isOnline" to isOnline,
+                "lastActiveAt" to Timestamp.now()
+            )
+            firestore.collection("users").document(uid).update(updates).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun saveProfile(profile: UserProfile): Result<Unit> {
@@ -101,25 +169,21 @@ class BondlyRepository(
             if (uid.isEmpty()) return Result.failure(Exception("Not logged in"))
 
             val level = UserLevelManager.calculateLevel(profile)
+            val assignedMemberId = if (profile.effectiveMemberId.isNotBlank()) {
+                profile.effectiveMemberId
+            } else {
+                allocateUniqueMemberId(uid)
+            }
             val updated = profile.copy(
                 userId = uid,
+                memberId = assignedMemberId,
+                publicUserId = assignedMemberId,
                 userLevel = level,
                 updatedAt = Timestamp.now()
             )
-            firestore.collection("users").document(uid).set(updated).await()
+            firestore.collection("users").document(uid).set(updated, SetOptions.merge()).await()
 
-            if (updated.publicUserId.isNotEmpty()) {
-                val indexDoc = PublicUserIndex(
-                    publicUserId = updated.publicUserId,
-                    userId = uid,
-                    displayName = updated.displayName,
-                    city = updated.city,
-                    gender = updated.gender,
-                    age = updated.age,
-                    photoUrl = updated.profilePhotoUrls.firstOrNull() ?: ""
-                )
-                firestore.collection("public_user_index").document(updated.publicUserId).set(indexDoc).await()
-            }
+            healPublicUserIndex(updated)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -230,94 +294,191 @@ class BondlyRepository(
         }
     }
 
-    suspend fun allocateUniquePublicId(uid: String): String {
+    /**
+     * Generates and allocates a unique Member ID in format: "BD" + numeric characters (e.g. BD979241).
+     * If user already has a Member ID, it is preserved permanently without modification.
+     */
+    suspend fun allocateUniqueMemberId(uid: String): String {
         if (!NetworkConnectivityManager.isConnected()) {
             throw NoInternetException("No internet connection. Please connect to the internet and try again.")
         }
+
+        // 1. Check if user already possesses a Member ID
+        try {
+            val userSnap = firestore.collection("users").document(uid).get(Source.SERVER).await()
+            val existingMemberId = userSnap.getString("memberId")?.trim()
+            if (!existingMemberId.isNullOrEmpty()) {
+                return existingMemberId
+            }
+            val existingPublicId = userSnap.getString("publicUserId")?.trim()
+            if (!existingPublicId.isNullOrEmpty()) {
+                return existingPublicId
+            }
+        } catch (_: Exception) {}
+
+        // 2. Uniqueness generation loop: "BD" + 6-digit random number
         var attempts = 0
-        while (attempts < 5) {
-            val candidate = "BND-${Random.nextInt(100000, 999999)}"
-            val snap = firestore.collection("public_user_index").document(candidate).get(Source.SERVER).await()
-            if (!snap.exists()) {
+        while (attempts < 10) {
+            val candidate = "BD${Random.nextInt(100000, 999999)}"
+
+            val snapIndex = try {
+                firestore.collection("public_user_index").document(candidate).get(Source.SERVER).await()
+            } catch (_: Exception) { null }
+
+            val snapUsers = try {
+                firestore.collection("users").whereEqualTo("memberId", candidate).limit(1).get(Source.SERVER).await()
+            } catch (_: Exception) { null }
+
+            val snapPublicUsers = try {
+                firestore.collection("users").whereEqualTo("publicUserId", candidate).limit(1).get(Source.SERVER).await()
+            } catch (_: Exception) { null }
+
+            val isFreeInIndex = snapIndex == null || !snapIndex.exists()
+            val isFreeInUsers = (snapUsers == null || snapUsers.isEmpty) && (snapPublicUsers == null || snapPublicUsers.isEmpty)
+
+            if (isFreeInIndex && isFreeInUsers) {
+                // Pre-reserve in public index
+                try {
+                    firestore.collection("public_user_index").document(candidate).set(
+                        mapOf(
+                            "memberId" to candidate,
+                            "publicUserId" to candidate,
+                            "userId" to uid
+                        )
+                    ).await()
+                } catch (_: Exception) {}
                 return candidate
             }
             attempts++
         }
-        return "BND-${System.currentTimeMillis() % 1000000}"
+        return "BD${(System.currentTimeMillis() % 900000) + 100000}"
+    }
+
+    suspend fun allocateUniquePublicId(uid: String): String {
+        return allocateUniqueMemberId(uid)
     }
 
     suspend fun searchUserByPublicId(publicId: String): PublicUserIndex? {
-        if (!NetworkConnectivityManager.isConnected()) {
-            throw NoInternetException("No internet connection. Please connect to the internet and try again.")
-        }
-        val query = publicId.trim()
-        if (query.isEmpty()) return null
-
-        val clean = query.uppercase(Locale.ROOT)
-
-        // 1. Check exact ID in public_user_index
-        try {
-            val snap = firestore.collection("public_user_index").document(clean).get(Source.SERVER).await()
-            if (snap.exists()) {
-                val index = snap.toObject(PublicUserIndex::class.java)
-                if (index != null && index.userId.isNotBlank()) return index
-            }
-        } catch (_: Exception) {}
-
-        // 2. Query public_user_index by field publicUserId
-        try {
-            val qSnap = firestore.collection("public_user_index")
-                .whereEqualTo("publicUserId", clean)
-                .limit(1).get(Source.SERVER).await()
-            val firstDoc = qSnap.documents.firstOrNull()
-            if (firstDoc != null) {
-                val index = firstDoc.toObject(PublicUserIndex::class.java)
-                if (index != null && index.userId.isNotBlank()) return index
-            }
-        } catch (_: Exception) {}
-
-        // 3. Fallback: Search in users collection and auto-heal index
-        try {
-            val profile = findUserByPublicId(query)
-            if (profile != null) {
-                val indexDoc = PublicUserIndex(
-                    publicUserId = profile.publicUserId.ifEmpty { clean },
-                    userId = profile.userId,
-                    displayName = profile.displayName,
-                    city = profile.city,
-                    gender = profile.gender,
-                    age = profile.age,
-                    photoUrl = profile.profilePhotoUrls.firstOrNull() ?: ""
-                )
-                healPublicUserIndex(profile)
-                return indexDoc
-            }
-        } catch (_: Exception) {}
-
-        return null
+        val profile = findUserByPublicId(publicId) ?: return null
+        return PublicUserIndex(
+            memberId = profile.effectiveMemberId,
+            publicUserId = profile.effectiveMemberId,
+            userId = profile.userId,
+            displayName = profile.displayName,
+            city = profile.city,
+            state = profile.state,
+            bio = profile.bio,
+            interests = profile.interests,
+            gender = profile.gender,
+            age = profile.age,
+            photoUrl = profile.profilePhotoUrls.firstOrNull() ?: "",
+            isOnline = profile.isCurrentlyOnline,
+            lastActiveAt = profile.lastActiveAt
+        )
     }
 
+    /**
+     * Resolves a user profile using their exact unique Bondly Member ID.
+     * Supports BD format (e.g. "BD979241"), lowercase inputs ("bd979241"),
+     * stripped numeric keys, and legacy formats.
+     */
     suspend fun findUserByPublicId(publicId: String, requesterUid: String = currentUid): UserProfile? {
         if (!NetworkConnectivityManager.isConnected()) {
             throw NoInternetException("No internet connection. Please connect to the internet and try again.")
         }
-        val query = publicId.trim()
-        if (query.isEmpty()) return null
+        val raw = publicId.trim()
+        if (raw.isEmpty()) return null
 
-        val clean = query.uppercase(Locale.ROOT)
+        val clean = raw.uppercase(Locale.ROOT)
         val isAdminRequester = checkIsAdmin(requesterUid)
 
-        // Build list of all candidate keys to test
-        val candidateKeys = mutableListOf(clean, query)
-        val stripped = clean.removePrefix("BONDLY-").removePrefix("BND-").removePrefix("@").trim()
-        if (stripped.isNotEmpty()) {
-            candidateKeys.add(stripped)
-            candidateKeys.add("BND-$stripped")
-            candidateKeys.add("BONDLY-$stripped")
+        // Build exhaustive normalization candidates
+        val candidateKeys = mutableSetOf<String>()
+        candidateKeys.add(clean)
+        candidateKeys.add(raw)
+
+        if (clean.startsWith("BD")) {
+            val digitsOnly = clean.removePrefix("BD").trim()
+            if (digitsOnly.isNotEmpty()) {
+                candidateKeys.add(digitsOnly)
+                candidateKeys.add("BD$digitsOnly")
+                candidateKeys.add("BD-$digitsOnly")
+            }
+        } else if (clean.all { it.isDigit() }) {
+            candidateKeys.add("BD$clean")
+            candidateKeys.add("BD-$clean")
+            candidateKeys.add("BND-$clean")
         }
 
-        // Layer 1: Check public_user_index document lookup
-        for (candidate in candidateKeys.distinct()) {
+        val strippedBnd = clean.removePrefix("BONDLY-").removePrefix("BND-").removePrefix("@").trim()
+        if (strippedBnd.isNotEmpty()) {
+            candidateKeys.add(strippedBnd)
+            candidateKeys.add("BD$strippedBnd")
+            candidateKeys.add("BND-$strippedBnd")
+        }
+
+        // Layer 1: Query users collection by memberId
+        for (candidate in candidateKeys) {
+            try {
+                val qSnap = firestore.collection("users")
+                    .whereEqualTo("memberId", candidate)
+                    .limit(1).get(Source.SERVER).await()
+                val doc = qSnap.documents.firstOrNull()
+                if (doc != null) {
+                    val p = doc.toObject(UserProfile::class.java)?.let {
+                        val mId = doc.getString("memberId") ?: doc.getString("publicUserId") ?: candidate
+                        it.copy(
+                            userId = if (it.userId.isNotBlank()) it.userId else doc.id,
+                            memberId = if (it.memberId.isNotBlank()) it.memberId else mId,
+                            publicUserId = if (it.publicUserId.isNotBlank()) it.publicUserId else mId
+                        )
+                    }
+                    if (p != null) {
+                        healPublicUserIndex(p)
+                        if (!isAdminRequester && p.accountStatus in listOf("banned", "suspended")) return null
+                        return p
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    throw e
+                }
+            }
+        }
+
+        // Layer 2: Query users collection by publicUserId
+        for (candidate in candidateKeys) {
+            try {
+                val qSnap = firestore.collection("users")
+                    .whereEqualTo("publicUserId", candidate)
+                    .limit(1).get(Source.SERVER).await()
+                val doc = qSnap.documents.firstOrNull()
+                if (doc != null) {
+                    val p = doc.toObject(UserProfile::class.java)?.let {
+                        val mId = doc.getString("memberId") ?: doc.getString("publicUserId") ?: candidate
+                        it.copy(
+                            userId = if (it.userId.isNotBlank()) it.userId else doc.id,
+                            memberId = if (it.memberId.isNotBlank()) it.memberId else mId,
+                            publicUserId = if (it.publicUserId.isNotBlank()) it.publicUserId else mId
+                        )
+                    }
+                    if (p != null) {
+                        healPublicUserIndex(p)
+                        if (!isAdminRequester && p.accountStatus in listOf("banned", "suspended")) return null
+                        return p
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    throw e
+                }
+            }
+        }
+
+        // Layer 3: Direct public_user_index document lookup
+        for (candidate in candidateKeys) {
             try {
                 val snap = firestore.collection("public_user_index").document(candidate).get(Source.SERVER).await()
                 if (snap.exists()) {
@@ -325,87 +486,56 @@ class BondlyRepository(
                     if (!uid.isNullOrEmpty()) {
                         val profile = getProfile(uid)
                         if (profile != null) {
-                            if (!isAdminRequester && profile.accountStatus in listOf("banned", "suspended")) {
-                                return null
-                            }
+                            if (!isAdminRequester && profile.accountStatus in listOf("banned", "suspended")) return null
                             return profile
                         }
                     }
                 }
-            } catch (_: Exception) {}
-        }
-
-        // Layer 2: Query public_user_index by field publicUserId
-        for (candidate in candidateKeys.distinct()) {
-            try {
-                val qSnap = firestore.collection("public_user_index")
-                    .whereEqualTo("publicUserId", candidate)
-                    .limit(1).get(Source.SERVER).await()
-                val doc = qSnap.documents.firstOrNull()
-                val uid = doc?.getString("userId")
-                if (!uid.isNullOrEmpty()) {
-                    val profile = getProfile(uid)
-                    if (profile != null) {
-                        if (!isAdminRequester && profile.accountStatus in listOf("banned", "suspended")) {
-                            return null
-                        }
-                        return profile
-                    }
+            } catch (e: Exception) {
+                if (e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    throw e
                 }
-            } catch (_: Exception) {}
-        }
-
-        // Layer 3: Query users collection directly by publicUserId
-        for (candidate in candidateKeys.distinct()) {
-            try {
-                val qSnap = firestore.collection("users")
-                    .whereEqualTo("publicUserId", candidate)
-                    .limit(1).get(Source.SERVER).await()
-                val doc = qSnap.documents.firstOrNull()
-                if (doc != null) {
-                    val profile = doc.toObject(UserProfile::class.java)?.let { p ->
-                        p.copy(userId = if (p.userId.isNotBlank()) p.userId else doc.id)
-                    }
-                    if (profile != null) {
-                        healPublicUserIndex(profile)
-                        if (!isAdminRequester && profile.accountStatus in listOf("banned", "suspended")) {
-                            return null
-                        }
-                        return profile
-                    }
-                }
-            } catch (_: Exception) {}
+            }
         }
 
         // Layer 4: Direct document ID lookup in users collection (by Firebase UID)
         try {
-            val userSnap = firestore.collection("users").document(query).get(Source.SERVER).await()
+            val userSnap = firestore.collection("users").document(raw).get(Source.SERVER).await()
             if (userSnap.exists()) {
-                val profile = userSnap.toObject(UserProfile::class.java)?.let { p ->
-                    p.copy(userId = if (p.userId.isNotBlank()) p.userId else userSnap.id)
+                val p = userSnap.toObject(UserProfile::class.java)?.let {
+                    val mId = userSnap.getString("memberId") ?: userSnap.getString("publicUserId") ?: ""
+                    it.copy(
+                        userId = if (it.userId.isNotBlank()) it.userId else userSnap.id,
+                        memberId = if (it.memberId.isNotBlank()) it.memberId else mId,
+                        publicUserId = if (it.publicUserId.isNotBlank()) it.publicUserId else mId
+                    )
                 }
-                if (profile != null) {
-                    healPublicUserIndex(profile)
-                    if (!isAdminRequester && profile.accountStatus in listOf("banned", "suspended")) {
-                        return null
-                    }
-                    return profile
+                if (p != null) {
+                    healPublicUserIndex(p)
+                    if (!isAdminRequester && p.accountStatus in listOf("banned", "suspended")) return null
+                    return p
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            if (e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                throw e
+            }
+        }
 
         // Layer 5: Admin extended search by exact display name
         if (isAdminRequester) {
             try {
                 val nameSnap = firestore.collection("users")
-                    .whereEqualTo("displayName", query)
+                    .whereEqualTo("displayName", raw)
                     .limit(1).get(Source.SERVER).await()
                 val doc = nameSnap.documents.firstOrNull()
                 if (doc != null) {
-                    val profile = doc.toObject(UserProfile::class.java)?.let { p ->
-                        p.copy(userId = if (p.userId.isNotBlank()) p.userId else doc.id)
+                    val p = doc.toObject(UserProfile::class.java)?.let {
+                        it.copy(userId = if (it.userId.isNotBlank()) it.userId else doc.id)
                     }
-                    if (profile != null) return profile
+                    if (p != null) return p
                 }
             } catch (_: Exception) {}
         }
@@ -413,22 +543,83 @@ class BondlyRepository(
         return null
     }
 
-    private suspend fun healPublicUserIndex(profile: UserProfile) {
-        if (profile.publicUserId.isNotBlank() && profile.userId.isNotBlank()) {
+    suspend fun healPublicUserIndex(profile: UserProfile) {
+        val effectiveId = profile.effectiveMemberId
+        if (effectiveId.isNotBlank() && profile.userId.isNotBlank()) {
             try {
                 val indexDoc = PublicUserIndex(
-                    publicUserId = profile.publicUserId,
+                    memberId = effectiveId,
+                    publicUserId = effectiveId,
                     userId = profile.userId,
                     displayName = profile.displayName,
                     city = profile.city,
+                    state = profile.state,
+                    bio = profile.bio,
+                    interests = profile.interests,
                     gender = profile.gender,
                     age = profile.age,
-                    photoUrl = profile.profilePhotoUrls.firstOrNull() ?: ""
+                    photoUrl = profile.profilePhotoUrls.firstOrNull() ?: "",
+                    isOnline = profile.isCurrentlyOnline,
+                    lastActiveAt = profile.lastActiveAt
                 )
                 firestore.collection("public_user_index")
-                    .document(profile.publicUserId.trim().uppercase(Locale.ROOT))
-                    .set(indexDoc).await()
+                    .document(effectiveId.trim().uppercase(Locale.ROOT))
+                    .set(indexDoc, SetOptions.merge()).await()
             } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Gets or creates an administrative direct communication channel with any user.
+     * Allows authorized admins to initiate communication without requiring mutual match.
+     */
+    suspend fun getOrCreateAdminMatch(targetUid: String): Result<Match> {
+        val myUid = currentUid
+        if (myUid.isEmpty()) return Result.failure(Exception("Not logged in"))
+        if (!checkIsAdmin(myUid)) return Result.failure(Exception("Unauthorized: Admin communication access required"))
+
+        return try {
+            val q1 = firestore.collection("matches")
+                .whereEqualTo("user1Id", myUid)
+                .whereEqualTo("user2Id", targetUid)
+                .limit(1).get(Source.SERVER).await()
+            val doc1 = q1.documents.firstOrNull()
+            if (doc1 != null) {
+                val m = doc1.toObject(Match::class.java)
+                if (m != null) return Result.success(m)
+            }
+
+            val q2 = firestore.collection("matches")
+                .whereEqualTo("user1Id", targetUid)
+                .whereEqualTo("user2Id", myUid)
+                .limit(1).get(Source.SERVER).await()
+            val doc2 = q2.documents.firstOrNull()
+            if (doc2 != null) {
+                val m = doc2.toObject(Match::class.java)
+                if (m != null) return Result.success(m)
+            }
+
+            val myProfile = getProfile(myUid) ?: UserProfile(userId = myUid, displayName = "Admin", role = "admin")
+            val targetProfile = getProfile(targetUid) ?: UserProfile(userId = targetUid, displayName = "User")
+            val matchId = "admin_${myUid}_$targetUid"
+            val adminMatch = Match(
+                id = matchId,
+                user1Id = myUid,
+                user2Id = targetUid,
+                user1Name = myProfile.displayName,
+                user2Name = targetProfile.displayName,
+                user1Photo = myProfile.profilePhotoUrls.firstOrNull() ?: "",
+                user2Photo = targetProfile.profilePhotoUrls.firstOrNull() ?: "",
+                users = listOf(myUid, targetUid),
+                lastMessage = "Official Admin Communication",
+                lastMessageSenderId = myUid,
+                lastMessageTimestamp = Timestamp.now(),
+                createdAt = Timestamp.now()
+            )
+            firestore.collection("matches").document(matchId).set(adminMatch).await()
+            Result.success(adminMatch)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

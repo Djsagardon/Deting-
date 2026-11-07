@@ -49,10 +49,31 @@ fun MatchesAndChatScreen(
     currentUserProfile: UserProfile,
     repository: BondlyRepository,
     onStartCall: (targetUid: String, targetName: String, isVideo: Boolean) -> Unit,
-    onNavigateToPublicProfile: (String) -> Unit
+    onNavigateToPublicProfile: (String) -> Unit,
+    initialPartnerUid: String? = null,
+    onClearInitialPartner: () -> Unit = {}
 ) {
+    val coroutineScope = rememberCoroutineScope()
     val matches by repository.observeMatches().collectAsState(initial = emptyList())
     var selectedMatch by remember { mutableStateOf<Match?>(null) }
+
+    LaunchedEffect(initialPartnerUid, matches) {
+        if (!initialPartnerUid.isNullOrEmpty()) {
+            val existing = matches.find { it.user1Id == initialPartnerUid || it.user2Id == initialPartnerUid }
+            if (existing != null) {
+                selectedMatch = existing
+                onClearInitialPartner()
+            } else {
+                coroutineScope.launch {
+                    val res = repository.getOrCreateAdminMatch(initialPartnerUid)
+                    res.onSuccess { m ->
+                        selectedMatch = m
+                        onClearInitialPartner()
+                    }
+                }
+            }
+        }
+    }
 
     // If a chat is open, render ActiveChatView
     if (selectedMatch != null) {

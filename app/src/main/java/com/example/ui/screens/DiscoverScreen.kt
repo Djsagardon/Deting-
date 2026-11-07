@@ -52,7 +52,12 @@ fun DiscoverScreen(
     var isSwiping by remember { mutableStateOf(false) }
 
     val candidates = remember(rawProfiles, excludedIds, currentUserId) {
-        rawProfiles.filter { it.userId != currentUserId && !excludedIds.contains(it.userId) }
+        rawProfiles.filter {
+            it.userId != currentUserId &&
+            !excludedIds.contains(it.userId) &&
+            it.profileCompleted &&
+            it.profilePhotoUrls.size >= 5
+        }
     }
 
     Box(
