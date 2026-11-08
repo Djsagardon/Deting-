@@ -44,6 +44,9 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 import kotlin.random.Random
 
+import com.example.data.repository.ImageUploadConfig
+import com.example.ui.components.ImgbbApiKeyDialog
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun OnboardingProfileScreen(
@@ -54,6 +57,9 @@ fun OnboardingProfileScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    var showImgbbKeyDialog by remember { mutableStateOf(false) }
+    var currentImgbbKey by remember { mutableStateOf(ImageUploadConfig.getApiKey(context)) }
 
     // Upload manager preserved across configuration / step navigation
     val uploadManager = remember {
@@ -670,6 +676,85 @@ fun OnboardingProfileScreen(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text("5 Profile Photos (Mandatory)", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
                                         Text("Select all 5 together or one by one. Direct upload via ImgBB.", fontSize = 12.sp, color = TextMuted)
+                                    }
+                                }
+
+                                val isKeyConfigured = ImageUploadConfig.isApiKeyConfigured(context)
+                                if (!isKeyConfigured) {
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = WarningOrange.copy(alpha = 0.15f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, WarningOrange.copy(alpha = 0.6f)),
+                                        modifier = Modifier.fillMaxWidth().clickable { showImgbbKeyDialog = true }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(14.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Key, contentDescription = null, tint = WarningOrange, modifier = Modifier.size(24.dp))
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("ImgBB API Key Required", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text("Direct photo upload requires an ImgBB API key. Tap here to configure.", color = TextLightGrey, fontSize = 11.sp)
+                                            }
+                                            TextButton(onClick = { showImgbbKeyDialog = true }) {
+                                                Text("Configure", color = WarningOrange, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().clickable { showImgbbKeyDialog = true }.padding(vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = OnlineGreen, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("ImgBB Key Configured (${currentImgbbKey.take(4)}****)", color = OnlineGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Update", color = BondlyPink, fontSize = 11.sp)
+                                    }
+                                }
+
+                                val failedSlots = photoSlots.filterIsInstance<PhotoSlotState.Failed>()
+                                if (failedSlots.isNotEmpty()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = ErrorRed.copy(alpha = 0.15f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, ErrorRed.copy(alpha = 0.6f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(18.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Upload Issue Detected", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            }
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            failedSlots.firstOrNull()?.errorMessage?.let { msg ->
+                                                Text(msg, color = ErrorRed, fontSize = 11.sp, lineHeight = 15.sp)
+                                            }
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Button(
+                                                    onClick = { uploadManager.retryAllFailed(context, currentUserId) },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                                ) {
+                                                    Text("Retry Failed Slots", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                                if (!isKeyConfigured) {
+                                                    OutlinedButton(
+                                                        onClick = { showImgbbKeyDialog = true },
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Text("Set ImgBB Key", fontSize = 11.sp, color = TextWhite)
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 

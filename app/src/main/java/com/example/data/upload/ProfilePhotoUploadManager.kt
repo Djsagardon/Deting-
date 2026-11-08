@@ -16,10 +16,10 @@ import kotlinx.coroutines.sync.withLock
 
 sealed class PhotoSlotState {
     data object Empty : PhotoSlotState()
-    data class Selected(val uri: Uri) : PhotoSlotState()
-    data class Uploading(val uri: Uri, val progressPercent: Int = 0) : PhotoSlotState()
+    data class Selected(val uri: Uri, val cachedRemoteUrl: String? = null) : PhotoSlotState()
+    data class Uploading(val uri: Uri, val progressPercent: Int = 0, val cachedRemoteUrl: String? = null) : PhotoSlotState()
     data class Success(val uri: Uri?, val remoteUrl: String) : PhotoSlotState()
-    data class Failed(val uri: Uri, val errorMessage: String) : PhotoSlotState()
+    data class Failed(val uri: Uri, val errorMessage: String, val cachedRemoteUrl: String? = null) : PhotoSlotState()
 
     val localUri: Uri?
         get() = when (this) {
@@ -33,9 +33,9 @@ sealed class PhotoSlotState {
     val displayUrl: String?
         get() = when (this) {
             is Success -> remoteUrl
+            is Failed -> cachedRemoteUrl ?: uri.toString()
             is Uploading -> uri.toString()
             is Selected -> uri.toString()
-            is Failed -> uri.toString()
             is Empty -> null
         }
 }
@@ -97,7 +97,6 @@ class ProfilePhotoUploadManager(
         // 1. If user selected 5 photos at once, assign them directly to slots 0..4
         if (distinctUris.size == MAX_SLOTS) {
             for (i in 0 until MAX_SLOTS) {
-                // If slot is already successful with the exact same URI, keep it
                 val existing = current[i]
                 if (existing is PhotoSlotState.Success && existing.uri == distinctUris[i]) {
                     continue
@@ -145,13 +144,33 @@ class ProfilePhotoUploadManager(
 
     /**
      * Retries uploading a specific failed slot without restarting other successful slots.
+     * If ImgBB upload previously succeeded, it preserves and reuses the cached remote URL for Firestore save.
      */
     fun retrySlot(context: Context, slotIndex: Int, userId: String = "") {
         if (slotIndex !in 0 until MAX_SLOTS) return
         val current = _slots.value.toMutableList()
         val slot = current[slotIndex]
         if (slot is PhotoSlotState.Failed) {
-            current[slotIndex] = PhotoSlotState.Selected(slot.uri)
+            current[slotIndex] = PhotoSlotState.Selected(slot.uri, cachedRemoteUrl = slot.cachedRemoteUrl)
+            _slots.value = current
+            triggerSequentialUpload(context.applicationContext, userId)
+        }
+    }
+
+    /**
+     * Retries all currently failed slots.
+     */
+    fun retryAllFailed(context: Context, userId: String = "") {
+        val current = _slots.value.toMutableList()
+        var hasFailed = false
+        for (i in 0 until MAX_SLOTS) {
+            val slot = current[i]
+            if (slot is PhotoSlotState.Failed) {
+                current[i] = PhotoSlotState.Selected(slot.uri, cachedRemoteUrl = slot.cachedRemoteUrl)
+                hasFailed = true
+            }
+        }
+        if (hasFailed) {
             _slots.value = current
             triggerSequentialUpload(context.applicationContext, userId)
         }
@@ -177,7 +196,6 @@ class ProfilePhotoUploadManager(
      */
     private fun triggerSequentialUpload(appContext: Context, userId: String) {
         if (activeUploadJob?.isActive == true) {
-            // Already running sequentially
             return
         }
 
@@ -186,44 +204,51 @@ class ProfilePhotoUploadManager(
                 _isSequentialUploading.value = true
                 try {
                     while (isActive) {
-                        // Find the next slot waiting for upload
                         val currentSlots = _slots.value
                         val nextIndex = currentSlots.indexOfFirst { it is PhotoSlotState.Selected }
                         if (nextIndex == -1) {
-                            // No more selected photos to upload
                             break
                         }
 
                         val selectedSlot = currentSlots[nextIndex] as PhotoSlotState.Selected
                         val uriToUpload = selectedSlot.uri
+                        val cachedRemoteUrl = selectedSlot.cachedRemoteUrl
 
                         _activeSlotIndex.value = nextIndex
-                        updateSlotState(nextIndex, PhotoSlotState.Uploading(uriToUpload, progressPercent = 0))
+                        updateSlotState(
+                            nextIndex,
+                            PhotoSlotState.Uploading(uriToUpload, progressPercent = 0, cachedRemoteUrl = cachedRemoteUrl)
+                        )
 
-                        Log.d(TAG, "Starting sequential upload for slot $nextIndex: $uriToUpload")
+                        Log.d(TAG, "Starting sequential upload for slot $nextIndex: $uriToUpload (cachedUrl=$cachedRemoteUrl)")
 
                         if (!NetworkConnectivityManager.isConnected()) {
                             updateSlotState(
                                 nextIndex,
                                 PhotoSlotState.Failed(
                                     uriToUpload,
-                                    "No internet connection. Please connect to the internet and try again."
+                                    "No internet connection. Please connect to the internet and try again.",
+                                    cachedRemoteUrl = cachedRemoteUrl
                                 )
                             )
                             continue
                         }
 
-                        // Perform the actual network upload via ImageUploadRepository
-                        val result = imageRepo.uploadProfilePhoto(
-                            appContext = appContext,
-                            uri = uriToUpload,
-                            userId = userId,
-                            slotIndex = nextIndex
-                        )
+                        // If remote URL is already cached from previous ImgBB success, bypass ImgBB upload and directly save
+                        val remoteUrlResult = if (!cachedRemoteUrl.isNullOrEmpty()) {
+                            Log.d(TAG, "Slot $nextIndex reusing existing cached ImgBB URL: $cachedRemoteUrl")
+                            Result.success(cachedRemoteUrl)
+                        } else {
+                            imageRepo.uploadProfilePhoto(
+                                appContext = appContext,
+                                uri = uriToUpload,
+                                userId = userId,
+                                slotIndex = nextIndex
+                            )
+                        }
 
-                        result.onSuccess { remoteUrl ->
-                            Log.d(TAG, "Slot $nextIndex upload succeeded: $remoteUrl. Now persisting to live server...")
-                            // Strictly do not report success until confirmed saved on server
+                        remoteUrlResult.onSuccess { remoteUrl ->
+                            Log.d(TAG, "Slot $nextIndex ImgBB URL confirmed: $remoteUrl. Now persisting to live Firestore server...")
                             if (userId.isNotEmpty()) {
                                 val saveResult = repository.updatePhotoSlotUrl(userId, nextIndex, remoteUrl)
                                 if (saveResult.isSuccess) {
@@ -237,7 +262,8 @@ class ProfilePhotoUploadManager(
                                         nextIndex,
                                         PhotoSlotState.Failed(
                                             uriToUpload,
-                                            "Photo uploaded, but server failed to save: $errFriendly"
+                                            "Photo uploaded, but server failed to save: $errFriendly",
+                                            cachedRemoteUrl = remoteUrl // Retain for retry without re-uploading
                                         )
                                     )
                                 }
@@ -251,7 +277,8 @@ class ProfilePhotoUploadManager(
                                 nextIndex,
                                 PhotoSlotState.Failed(
                                     uriToUpload,
-                                    friendlyMsg
+                                    friendlyMsg,
+                                    cachedRemoteUrl = null
                                 )
                             )
                         }

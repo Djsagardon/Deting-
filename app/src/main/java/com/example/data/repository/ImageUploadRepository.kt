@@ -3,19 +3,21 @@ package com.example.data.repository
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
 import com.example.BuildConfig
-import com.example.util.NoInternetException
 import com.example.util.NetworkConnectivityManager
+import com.example.util.NoInternetException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 sealed class ImageUploadResult {
@@ -45,12 +47,13 @@ object ImageUploadConfig {
         val storedKey = context?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             ?.getString(KEY_IMGBB_API_KEY, null)
             ?.trim()
-        if (!storedKey.isNullOrEmpty()) {
+        if (!storedKey.isNullOrEmpty() && storedKey != "PLACEHOLDER") {
             return storedKey
         }
 
         return try {
-            BuildConfig.IMGBB_API_KEY.trim()
+            val key = BuildConfig.IMGBB_API_KEY.trim()
+            if (key.isNotEmpty() && key != "PLACEHOLDER") key else ""
         } catch (_: Exception) {
             ""
         }
@@ -81,7 +84,7 @@ object ImageUploadConfig {
      */
     fun isApiKeyConfigured(context: Context?): Boolean {
         val key = getApiKey(context)
-        return key.isNotBlank() && key != "PLACEHOLDER" && key.length >= 10
+        return key.isNotBlank() && key != "PLACEHOLDER" && key.length >= 8
     }
 }
 
@@ -121,9 +124,9 @@ class ImageUploadRepository(private val context: Context? = null) {
         }
 
         try {
-            // Test connectivity to ImgBB by probing endpoint
+            // Test connectivity to ImgBB by probing endpoint with key
             val testRequest = Request.Builder()
-                .url(ImageUploadConfig.IMGBB_UPLOAD_ENDPOINT)
+                .url("${ImageUploadConfig.IMGBB_UPLOAD_ENDPOINT}?key=$apiKey")
                 .head()
                 .build()
 
@@ -158,9 +161,9 @@ class ImageUploadRepository(private val context: Context? = null) {
 
     /**
      * Uploads a single compressed image directly to official ImgBB API endpoint:
-     * POST https://api.imgbb.com/1/upload
+     * POST https://api.imgbb.com/1/upload?key={apiKey}
      * Parameters:
-     * - key: API key
+     * - key: API key (query param and multipart form)
      * - image: Multipart binary JPEG
      * - name: Optional image title
      */
@@ -185,7 +188,7 @@ class ImageUploadRepository(private val context: Context? = null) {
             return@withContext Result.failure(Exception(msg))
         }
 
-        // 3. Compress image to optimized JPEG bytes under 1.5MB
+        // 3. Compress image to optimized, orientation-corrected JPEG bytes under 1.5MB
         val compressedBytes = compressImageUri(appContext, uri)
             ?: return@withContext Result.failure(Exception("Could not read or process image file."))
 
@@ -204,8 +207,11 @@ class ImageUploadRepository(private val context: Context? = null) {
                 .addFormDataPart("name", photoName)
                 .build()
 
+            // Pass key both on URL query and in multipart body to ensure maximum edge compatibility
+            val uploadUrl = "${ImageUploadConfig.IMGBB_UPLOAD_ENDPOINT}?key=$apiKey"
+
             val request = Request.Builder()
-                .url(ImageUploadConfig.IMGBB_UPLOAD_ENDPOINT)
+                .url(uploadUrl)
                 .post(multipartBody)
                 .build()
 
@@ -248,15 +254,17 @@ class ImageUploadRepository(private val context: Context? = null) {
                 return@withContext Result.failure(Exception("Invalid response format from ImgBB API."))
             }
 
-            val isSuccess = json.optBoolean("success", false)
+            val isSuccess = json.optBoolean("success", false) || json.optInt("status", 0) == 200
             if (isSuccess) {
                 val dataObj = json.optJSONObject("data")
-                val directUrl = dataObj?.optString("url", "") ?: ""
-                val displayUrl = dataObj?.optString("display_url", "") ?: ""
+                val directUrl = dataObj?.optString("url", "")?.trim() ?: ""
+                val displayUrl = dataObj?.optString("display_url", "")?.trim() ?: ""
+                val imageUrl = dataObj?.optJSONObject("image")?.optString("url", "")?.trim() ?: ""
 
                 val finalUrl = when {
                     directUrl.startsWith("http://") || directUrl.startsWith("https://") -> directUrl
                     displayUrl.startsWith("http://") || displayUrl.startsWith("https://") -> displayUrl
+                    imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> imageUrl
                     else -> ""
                 }
 
@@ -300,44 +308,89 @@ class ImageUploadRepository(private val context: Context? = null) {
     }
 
     /**
-     * Compresses the bitmap at URI to a standard, high-quality JPEG under 1.5MB.
+     * Reads image URI, preserves EXIF orientation, and compresses down to crisp JPEG under 1.5MB.
      */
     private fun compressImageUri(context: Context, uri: Uri): ByteArray? {
-        var inputStream: InputStream? = null
         return try {
-            inputStream = context.contentResolver.openInputStream(uri)
+            // Read raw bytes once from ContentResolver to avoid multi-open permission drops
+            val rawBytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                stream.readBytes()
+            } ?: return null
+
+            if (rawBytes.isEmpty()) return null
+
+            // Inspect EXIF orientation
+            val orientation = try {
+                ByteArrayInputStream(rawBytes).use { bais ->
+                    val exif = ExifInterface(bais)
+                    exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                }
+            } catch (_: Exception) {
+                ExifInterface.ORIENTATION_NORMAL
+            }
+
+            val rotationDegrees = when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                else -> 0
+            }
+
+            // Decode bounds
             val boundsOptions = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
             }
-            BitmapFactory.decodeStream(inputStream, null, boundsOptions)
-            inputStream?.close()
+            BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, boundsOptions)
 
-            // Calculate inSampleSize to prevent OutOfMemory
+            // Downscale to max dimension 1600px to ensure crisp display and fast upload
             var sampleSize = 1
-            val maxDimension = 1800
+            val maxDimension = 1600
             val maxSide = maxOf(boundsOptions.outWidth, boundsOptions.outHeight)
             while (maxSide / (sampleSize * 2) >= maxDimension) {
                 sampleSize *= 2
             }
 
-            inputStream = context.contentResolver.openInputStream(uri)
             val decodeOptions = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inPreferredConfig = Bitmap.Config.RGB_565
             }
-            val bitmap = BitmapFactory.decodeStream(inputStream, null, decodeOptions) ?: return null
+            val decodedBitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, decodeOptions)
+                ?: return null
 
+            // Apply EXIF rotation if needed
+            val orientedBitmap = if (rotationDegrees != 0) {
+                val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                val rotated = Bitmap.createBitmap(
+                    decodedBitmap, 0, 0,
+                    decodedBitmap.width, decodedBitmap.height,
+                    matrix, true
+                )
+                if (rotated != decodedBitmap) {
+                    decodedBitmap.recycle()
+                }
+                rotated
+            } else {
+                decodedBitmap
+            }
+
+            // Compress to standard JPEG under 1.5MB
+            var quality = 85
             val outputStream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-            bitmap.recycle()
-            outputStream.toByteArray()
+            orientedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+
+            var resultBytes = outputStream.toByteArray()
+            while (resultBytes.size > 1_500_000 && quality > 50) {
+                quality -= 15
+                outputStream.reset()
+                orientedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+                resultBytes = outputStream.toByteArray()
+            }
+
+            orientedBitmap.recycle()
+            resultBytes
         } catch (e: Exception) {
-            Log.e(TAG, "Error compressing image: ${e.message}")
+            Log.e(TAG, "Error processing and compressing image: ${e.message}", e)
             null
-        } finally {
-            try {
-                inputStream?.close()
-            } catch (_: Exception) {}
         }
     }
 }

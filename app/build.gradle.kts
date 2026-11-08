@@ -18,9 +18,29 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        val imgbbKey = (project.findProperty("imgbbApiKey") as? String)
-            ?.takeIf { it.isNotBlank() }
-            ?: System.getenv("IMGBB_API_KEY")
+        val imgbbKey = (project.findProperty("imgbbApiKey") as? String)?.takeIf { it.isNotBlank() }
+            ?: (project.findProperty("IMGBB_API_KEY") as? String)?.takeIf { it.isNotBlank() }
+            ?: (project.findProperty("imgbb_api_key") as? String)?.takeIf { it.isNotBlank() }
+            ?: (project.findProperty("imgbbKey") as? String)?.takeIf { it.isNotBlank() }
+            ?: System.getenv("IMGBB_API_KEY")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("imgbbApiKey")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("imgbb_api_key")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("IMGBB_KEY")?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("IMGBB_API_KEY")?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("imgbbApiKey")?.takeIf { it.isNotBlank() }
+            ?: run {
+                val envFiles = listOf(rootProject.file(".env"), rootProject.file(".env.local"), file(".env"))
+                envFiles.firstNotNullOfOrNull { f ->
+                    if (f.exists()) {
+                        f.readLines().firstNotNullOfOrNull { line ->
+                            val trimmed = line.trim()
+                            if (trimmed.startsWith("IMGBB_API_KEY=") || trimmed.startsWith("imgbb_api_key=") || trimmed.startsWith("IMGBB_KEY=")) {
+                                trimmed.substringAfter("=").trim().removeSurrounding("\"").removeSurrounding("'")
+                            } else null
+                        }
+                    } else null
+                }
+            }
             ?: ""
         buildConfigField("String", "IMGBB_API_KEY", "\"$imgbbKey\"")
     }
