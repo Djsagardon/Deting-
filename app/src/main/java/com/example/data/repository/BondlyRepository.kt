@@ -1678,15 +1678,32 @@ class BondlyRepository(
                     .addOnSuccessListener { snap2 ->
                         val list2 = snap2.documents.mapNotNull { it.toObject(CallSession::class.java) }
                         val combined = (list1 + list2).distinctBy { it.callId }
-                            .sortedByDescending { it.createdAt?.seconds ?: 0L }
-                        trySend(combined)
+                        trySend(combined.sortedByDescending { it.createdAt?.seconds ?: 0L })
                     }
                     .addOnFailureListener {
-                        trySend(list1)
+                        trySend(list1.sortedByDescending { it.createdAt?.seconds ?: 0L })
                     }
             }
         awaitClose { reg.remove() }
     }
+
+
+    /**
+     * Observes count of currently ongoing/active or ringing calls across the platform for Admin overview.
+     */
+    fun observeActiveCallsCount(): Flow<Int> = callbackFlow {
+        val reg = firestore.collection("calls")
+            .whereIn("status", listOf("ringing", "active"))
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    trySend(0)
+                    return@addSnapshotListener
+                }
+                trySend(snapshot?.size() ?: 0)
+            }
+        awaitClose { reg.remove() }
+    }
+
 
     // =========================================================================
     // 8. BLOCKS, REPORTS & ACCOUNT DELETION

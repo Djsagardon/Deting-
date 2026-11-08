@@ -55,6 +55,7 @@ fun AdminDashboardScreen(
     val allReports by repository.observeModerationReports().collectAsState(initial = emptyList())
     val allLogs by repository.observeAdminAuditLogs().collectAsState(initial = emptyList())
     val matches by repository.observeMatches().collectAsState(initial = emptyList())
+    val activeCallsCount by repository.observeActiveCallsCount().collectAsState(initial = 0)
 
     // Verification check: ensure current user is actually admin
     var isAuthorizedAdmin by remember { mutableStateOf<Boolean?>(null) }
@@ -159,7 +160,9 @@ fun AdminDashboardScreen(
                 0 -> AdminOverviewTab(
                     users = allUsers,
                     matchesCount = matches.size,
-                    sessions = allSessions
+                    sessions = allSessions,
+                    reportsCount = allReports.size,
+                    activeCallsCount = activeCallsCount
                 )
                 1 -> AdminUserManagementTab(
                     users = allUsers,
@@ -239,9 +242,16 @@ fun AdminDashboardScreen(
 private fun AdminOverviewTab(
     users: List<UserProfile>,
     matchesCount: Int,
-    sessions: List<UserSession>
+    sessions: List<UserSession>,
+    reportsCount: Int,
+    activeCallsCount: Int
 ) {
     val totalUsers = users.size
+    val completedProfiles = users.count { it.profileCompleted && it.profilePhotoUrls.size >= 5 }
+    val incompleteProfiles = totalUsers - completedProfiles
+    val onlineUsers = users.count { it.isOnline }
+    val offlineUsers = totalUsers - onlineUsers
+
     val maleCount = users.count { it.gender.equals("Man", ignoreCase = true) || it.gender.equals("Male", ignoreCase = true) }
     val femaleCount = users.count { it.gender.equals("Woman", ignoreCase = true) || it.gender.equals("Female", ignoreCase = true) }
     val activeUsers = users.count { it.accountStatus == "active" }
@@ -272,8 +282,22 @@ private fun AdminOverviewTab(
 
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AdminStatCard("Total Users", "$totalUsers", Icons.Filled.People, BondlyPink, modifier = Modifier.weight(1f))
-                AdminStatCard("Active Users", "$activeUsers", Icons.Filled.CheckCircle, OnlineGreen, modifier = Modifier.weight(1f))
+                AdminStatCard("Total Registered", "$totalUsers", Icons.Filled.People, BondlyPink, modifier = Modifier.weight(1f))
+                AdminStatCard("Active Accounts", "$activeUsers", Icons.Filled.CheckCircle, OnlineGreen, modifier = Modifier.weight(1f))
+            }
+        }
+
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                AdminStatCard("Completed (5 Photos)", "$completedProfiles", Icons.Filled.VerifiedUser, OnlineGreen, modifier = Modifier.weight(1f))
+                AdminStatCard("Incomplete Profiles", "$incompleteProfiles", Icons.Filled.PendingActions, WarningOrange, modifier = Modifier.weight(1f))
+            }
+        }
+
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                AdminStatCard("Online Now", "$onlineUsers", Icons.Filled.Wifi, OnlineGreen, modifier = Modifier.weight(1f))
+                AdminStatCard("Offline Users", "$offlineUsers", Icons.Filled.WifiOff, TextMuted, modifier = Modifier.weight(1f))
             }
         }
 
@@ -294,7 +318,14 @@ private fun AdminOverviewTab(
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 AdminStatCard("Confirmed Matches", "$matchesCount", Icons.Filled.Favorite, BondlyPink, modifier = Modifier.weight(1f))
+                AdminStatCard("Active Calls Now", "$activeCallsCount", Icons.Filled.Call, SuperLikeBlue, modifier = Modifier.weight(1f))
+            }
+        }
+
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 AdminStatCard("Active Sessions", "${sessions.size}", Icons.Filled.Timer, BondlyPurple, modifier = Modifier.weight(1f))
+                AdminStatCard("Reports / Flagged", "$reportsCount", Icons.Filled.Report, if (reportsCount > 0) ErrorRed else TextMuted, modifier = Modifier.weight(1f))
             }
         }
     }

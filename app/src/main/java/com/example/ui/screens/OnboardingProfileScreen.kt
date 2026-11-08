@@ -1295,6 +1295,26 @@ fun OnboardingProfileScreen(
                 }
             }
         }
+
+        if (showImgbbKeyDialog) {
+            ImgbbApiKeyDialog(
+                currentKey = currentImgbbKey,
+                onDismiss = { showImgbbKeyDialog = false },
+                onSaveKey = { newKey ->
+                    ImageUploadConfig.setApiKey(context, newKey)
+                    currentImgbbKey = newKey
+                    showImgbbKeyDialog = false
+                    Toast.makeText(context, "ImgBB API Key saved successfully", Toast.LENGTH_SHORT).show()
+                    uploadManager.retryAllFailed(context, currentUserId)
+                },
+                onResetToDefault = {
+                    ImageUploadConfig.resetApiKey(context)
+                    currentImgbbKey = ImageUploadConfig.getApiKey(context)
+                    showImgbbKeyDialog = false
+                    Toast.makeText(context, "Reset to build default API key", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
     }
 }
 

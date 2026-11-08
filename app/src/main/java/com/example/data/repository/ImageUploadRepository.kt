@@ -100,7 +100,47 @@ class ImageUploadRepository(private val context: Context? = null) {
                 .writeTimeout(60, TimeUnit.SECONDS)
                 .build()
         }
+
+        fun parseImgbbResponse(responseBody: String, slotIndex: Int = 0): Result<String> {
+            val json = try {
+                JSONObject(responseBody)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse ImgBB JSON: $responseBody", e)
+                return Result.failure(Exception("Invalid response format from ImgBB API."))
+            }
+
+            val isSuccess = json.optBoolean("success", false) || json.optInt("status", 0) == 200
+            if (isSuccess) {
+                val dataObj = json.optJSONObject("data")
+                val directUrl = dataObj?.optString("url", "")?.trim() ?: ""
+                val displayUrl = dataObj?.optString("display_url", "")?.trim() ?: ""
+                val imageUrl = dataObj?.optJSONObject("image")?.optString("url", "")?.trim() ?: ""
+
+                val finalUrl = when {
+                    directUrl.startsWith("http://") || directUrl.startsWith("https://") -> directUrl
+                    displayUrl.startsWith("http://") || displayUrl.startsWith("https://") -> displayUrl
+                    imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> imageUrl
+                    else -> ""
+                }
+
+                if (finalUrl.isNotBlank()) {
+                    Log.d(TAG, "Photo slot ${slotIndex + 1} uploaded successfully to ImgBB: $finalUrl")
+                    return Result.success(finalUrl)
+                }
+            }
+
+            val failReason = try {
+                val err = json.optJSONObject("error")
+                err?.optString("message", "Unknown error from ImgBB") ?: "Missing image URL in ImgBB response."
+            } catch (_: Exception) {
+                "Upload could not be verified by ImgBB."
+            }
+
+            Log.e(TAG, "ImgBB returned failure: $failReason")
+            return Result.failure(Exception(failReason))
+        }
     }
+
 
     /**
      * Tests connectivity to the official ImgBB API and verifies API key validity.
@@ -246,43 +286,10 @@ class ImageUploadRepository(private val context: Context? = null) {
                 return@withContext Result.failure(Exception(diagnosticMsg))
             }
 
-            // 6. Parse response JSON from ImgBB
-            val json = try {
-                JSONObject(responseBody)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse ImgBB JSON: $responseBody", e)
-                return@withContext Result.failure(Exception("Invalid response format from ImgBB API."))
-            }
+            // 6. Parse response JSON from ImgBB using testable parser
+            val parseResult = parseImgbbResponse(responseBody, slotIndex)
+            return@withContext parseResult
 
-            val isSuccess = json.optBoolean("success", false) || json.optInt("status", 0) == 200
-            if (isSuccess) {
-                val dataObj = json.optJSONObject("data")
-                val directUrl = dataObj?.optString("url", "")?.trim() ?: ""
-                val displayUrl = dataObj?.optString("display_url", "")?.trim() ?: ""
-                val imageUrl = dataObj?.optJSONObject("image")?.optString("url", "")?.trim() ?: ""
-
-                val finalUrl = when {
-                    directUrl.startsWith("http://") || directUrl.startsWith("https://") -> directUrl
-                    displayUrl.startsWith("http://") || displayUrl.startsWith("https://") -> displayUrl
-                    imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> imageUrl
-                    else -> ""
-                }
-
-                if (finalUrl.isNotBlank()) {
-                    Log.d(TAG, "Photo slot ${slotIndex + 1} uploaded successfully to ImgBB: $finalUrl")
-                    return@withContext Result.success(finalUrl)
-                }
-            }
-
-            val failReason = try {
-                val err = json.optJSONObject("error")
-                err?.optString("message", "Unknown error from ImgBB") ?: "Missing image URL in ImgBB response."
-            } catch (_: Exception) {
-                "Upload could not be verified by ImgBB."
-            }
-
-            Log.e(TAG, "ImgBB returned failure: $failReason")
-            Result.failure(Exception(failReason))
 
         } catch (e: Exception) {
             Log.e(TAG, "Exception uploading image to ImgBB: ${e.message}", e)
@@ -394,3 +401,5 @@ class ImageUploadRepository(private val context: Context? = null) {
         }
     }
 }
+
+

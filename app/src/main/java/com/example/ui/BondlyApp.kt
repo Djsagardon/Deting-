@@ -47,10 +47,15 @@ import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.AppAuthState
 import com.google.firebase.auth.FirebaseUser
 
+import com.example.NotificationPayload
+
 @Composable
 fun BondlyApp(
-    repository: BondlyRepository = remember { BondlyRepository() }
+    repository: BondlyRepository = remember { BondlyRepository() },
+    incomingNotification: NotificationPayload? = null,
+    onConsumeNotification: () -> Unit = {}
 ) {
+
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         NetworkConnectivityManager.initialize(context)
@@ -157,11 +162,14 @@ fun BondlyApp(
                 currentUserId = state.userId,
                 initialProfile = state.profile,
                 repository = repository,
+                incomingNotification = incomingNotification,
+                onConsumeNotification = onConsumeNotification,
                 onSignOut = {
                     authViewModel.signOut()
                 }
             )
         }
+
     }
 }
 
@@ -170,6 +178,8 @@ private fun AuthenticatedAppContent(
     currentUserId: String,
     initialProfile: UserProfile,
     repository: BondlyRepository,
+    incomingNotification: NotificationPayload? = null,
+    onConsumeNotification: () -> Unit = {},
     onSignOut: () -> Unit
 ) {
     val context = LocalContext.current
@@ -293,6 +303,46 @@ private fun AuthenticatedAppContent(
         screenStack.add(currentScreen)
         currentScreen = screen
     }
+
+    // Automatic Notification Tap Navigation handler
+    LaunchedEffect(incomingNotification) {
+        val payload = incomingNotification ?: return@LaunchedEffect
+        when (payload.type) {
+            "match_request", "profile" -> {
+                if (payload.targetId.isNotBlank()) {
+                    navigateTo(Screen.PublicProfile(payload.targetId))
+                } else {
+                    selectedTab = 2 // Alerts tab
+                    currentScreen = Screen.Main
+                }
+            }
+            "chat", "message" -> {
+                if (payload.targetId.isNotBlank()) {
+                    pendingChatPartnerUid = payload.targetId
+                }
+                selectedTab = 1 // Matches and Chat tab
+                currentScreen = Screen.Main
+            }
+            "match", "match_accepted" -> {
+                if (payload.targetId.isNotBlank()) {
+                    pendingChatPartnerUid = payload.targetId
+                }
+                selectedTab = 1 // Matches tab
+                currentScreen = Screen.Main
+            }
+            "admin_announcement", "announcement", "system" -> {
+                selectedTab = 2 // Alerts / Notifications tab
+                currentScreen = Screen.Main
+            }
+            else -> {
+                if (payload.targetId.isNotBlank()) {
+                    navigateTo(Screen.PublicProfile(payload.targetId))
+                }
+            }
+        }
+        onConsumeNotification()
+    }
+
 
     fun navigateBack() {
         if (screenStack.isNotEmpty()) {
