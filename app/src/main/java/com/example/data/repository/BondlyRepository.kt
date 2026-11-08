@@ -75,7 +75,7 @@ class BondlyRepository(
             return@callbackFlow
         }
         val reg = firestore.collection("users").document(uid)
-            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+            .addSnapshotListener(MetadataChanges.EXCLUDE) { snapshot, error ->
                 if (error != null) {
                     trySend(null)
                     return@addSnapshotListener
@@ -111,7 +111,7 @@ class BondlyRepository(
         }
         trySend(UserProfileState.Loading)
         val reg = firestore.collection("users").document(uid)
-            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+            .addSnapshotListener(MetadataChanges.EXCLUDE) { snapshot, error ->
                 if (error != null) {
                     trySend(UserProfileState.Error(error.localizedMessage ?: "Failed to load user profile"))
                     return@addSnapshotListener
@@ -133,7 +133,7 @@ class BondlyRepository(
                 }
                 if (profile == null) {
                     trySend(UserProfileState.NotFound)
-                } else if (!profile.profileCompleted) {
+                } else if (!profile.profileCompleted || profile.profilePhotoUrls.size < 5) {
                     trySend(UserProfileState.Incomplete(profile))
                 } else {
                     trySend(UserProfileState.Loaded(profile))
@@ -153,7 +153,7 @@ class BondlyRepository(
                 "isOnline" to isOnline,
                 "lastActiveAt" to Timestamp.now()
             )
-            firestore.collection("users").document(uid).update(updates).await()
+            firestore.collection("users").document(uid).set(updates, SetOptions.merge()).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -1854,11 +1854,12 @@ class BondlyRepository(
         val uid = currentUid
         if (uid.isEmpty() || token.isEmpty()) return
         try {
-            firestore.collection("users").document(uid).update(
+            firestore.collection("users").document(uid).set(
                 mapOf(
                     "fcmTokens" to FieldValue.arrayUnion(token),
                     "lastActiveAt" to Timestamp.now()
-                )
+                ),
+                SetOptions.merge()
             ).await()
         } catch (_: Exception) {}
     }

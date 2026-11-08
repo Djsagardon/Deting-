@@ -41,6 +41,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 
+import androidx.compose.ui.text.style.TextAlign
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ui.viewmodel.AuthViewModel
+import com.example.ui.viewmodel.AppAuthState
+import com.google.firebase.auth.FirebaseUser
+
 @Composable
 fun BondlyApp(
     repository: BondlyRepository = remember { BondlyRepository() }
@@ -50,40 +56,119 @@ fun BondlyApp(
         NetworkConnectivityManager.initialize(context)
     }
 
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    val authViewModel: AuthViewModel = viewModel()
+    val authState by authViewModel.authState.collectAsState()
+    val isOnline by NetworkConnectivityManager.isOnline.collectAsState()
 
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            currentUser = auth.currentUser
-        }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose {
-            Firebase.auth.removeAuthStateListener(listener)
-        }
+    // Strict online-only barrier for authenticated users
+    if (!isOnline && authState !is AppAuthState.Unauthenticated) {
+        NoInternetScreen(
+            onRetry = {
+                authViewModel.retry()
+            }
+        )
+        return
     }
 
-    val user = currentUser
-    if (user == null) {
-        AuthScreen(
-            onAuthSuccess = { authedUser ->
-                currentUser = authedUser
+    when (val state = authState) {
+        is AppAuthState.Initializing -> {
+            Box(
+                modifier = Modifier.fillMaxSize().background(CharcoalDark),
+                contentAlignment = androidx.compose.ui.Alignment.Center
+            ) {
+                Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = BondlyPink, strokeWidth = 3.dp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Connecting to Bondly...", color = TextWhite, fontSize = 14.sp)
+                }
             }
-        )
-    } else {
-        AuthenticatedAppContent(
-            currentUserId = user.uid,
-            repository = repository,
-            onSignOut = {
-                Firebase.auth.signOut()
-                currentUser = null
+        }
+
+        is AppAuthState.Unauthenticated, is AppAuthState.AuthFailed -> {
+            AuthScreen(
+                onAuthSuccess = { authedUser ->
+                    authViewModel.resolveUserProfile(authedUser)
+                }
+            )
+        }
+
+        is AppAuthState.NetworkUnavailable -> {
+            NoInternetScreen(
+                onRetry = {
+                    authViewModel.retry()
+                }
+            )
+        }
+
+        is AppAuthState.RequestFailed -> {
+            Box(
+                modifier = Modifier.fillMaxSize().background(CharcoalDark).padding(24.dp),
+                contentAlignment = androidx.compose.ui.Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Filled.Warning, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(48.dp))
+                    Text("Could not connect to Bondly", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(state.message, color = TextMuted, fontSize = 13.sp, textAlign = TextAlign.Center)
+                    if (state.canRetry) {
+                        PrimaryButton(text = "Retry", onClick = { authViewModel.retry() })
+                    }
+                }
             }
-        )
+        }
+
+        is AppAuthState.AuthenticatedProfileNotCreated -> {
+            OnboardingProfileScreen(
+                currentUserId = state.userId,
+                repository = repository,
+                initialProfile = null,
+                onProfileCreated = {
+                    authViewModel.retry()
+                }
+            )
+        }
+
+        is AppAuthState.AuthenticatedProfileIncomplete -> {
+            OnboardingProfileScreen(
+                currentUserId = state.userId,
+                repository = repository,
+                initialProfile = state.profile,
+                onProfileCreated = {
+                    authViewModel.retry()
+                }
+            )
+        }
+
+        is AppAuthState.ProfileSetupInProgress -> {
+            OnboardingProfileScreen(
+                currentUserId = state.userId,
+                repository = repository,
+                initialProfile = null,
+                onProfileCreated = {
+                    authViewModel.retry()
+                }
+            )
+        }
+
+        is AppAuthState.AuthenticatedProfileCompleted -> {
+            AuthenticatedAppContent(
+                currentUserId = state.userId,
+                initialProfile = state.profile,
+                repository = repository,
+                onSignOut = {
+                    authViewModel.signOut()
+                }
+            )
+        }
     }
 }
 
 @Composable
 private fun AuthenticatedAppContent(
     currentUserId: String,
+    initialProfile: UserProfile,
     repository: BondlyRepository,
     onSignOut: () -> Unit
 ) {
@@ -171,8 +256,9 @@ private fun AuthenticatedAppContent(
         }
     }
 
-    val profileState by repository.observeProfileState(currentUserId).collectAsState(initial = UserProfileState.Loading)
-    val incomingCall by repository.observeIncomingCalls().collectAsState(initial = null)
+    val liveProfile by remember(currentUserId) { repository.observeProfile(currentUserId) }.collectAsState(initial = initialProfile)
+    val currentProfile = liveProfile ?: initialProfile
+    val incomingCall by remember(currentUserId) { repository.observeIncomingCalls() }.collectAsState(initial = null)
 
     // Accurate real-time online presence management
     DisposableEffect(currentUserId, isOnline) {
@@ -244,14 +330,12 @@ private fun AuthenticatedAppContent(
         pendingCallParams = null
     }
 
-    val currentProfile = (profileState as? UserProfileState.Loaded)?.profile
-
     fun handleStartCall(targetUid: String, targetName: String, isVideo: Boolean) {
         if (!NetworkConnectivityManager.isConnected()) {
             Toast.makeText(context, "No internet connection. Please connect to the internet and try again.", Toast.LENGTH_SHORT).show()
             return
         }
-        val profile = currentProfile ?: UserProfile()
+        val profile = currentProfile
         val progression = UserLevelManager.calculateProgression(profile)
         if (isVideo) {
             if (!progression.isVideoCallAllowed) {
@@ -277,67 +361,6 @@ private fun AuthenticatedAppContent(
         val perms = if (isVideo) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
         else arrayOf(Manifest.permission.RECORD_AUDIO)
         callPermissionLauncher.launch(perms)
-    }
-
-    // STRICT MANDATORY PROFILE SETUP GATING: Never allow new/incomplete profiles to bypass onboarding!
-    when (val state = profileState) {
-        is UserProfileState.Loading -> {
-            Box(
-                modifier = Modifier.fillMaxSize().background(CharcoalDark),
-                contentAlignment = androidx.compose.ui.Alignment.Center
-            ) {
-                Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = BondlyPink, strokeWidth = 3.dp)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Connecting to Bondly...", color = TextWhite, fontSize = 14.sp)
-                }
-            }
-            return
-        }
-        is UserProfileState.NotFound -> {
-            OnboardingProfileScreen(
-                currentUserId = currentUserId,
-                repository = repository,
-                initialProfile = null,
-                onProfileCreated = {
-                    currentScreen = Screen.Main
-                    selectedTab = 0
-                }
-            )
-            return
-        }
-        is UserProfileState.Incomplete -> {
-            OnboardingProfileScreen(
-                currentUserId = currentUserId,
-                repository = repository,
-                initialProfile = state.profile,
-                onProfileCreated = {
-                    currentScreen = Screen.Main
-                    selectedTab = 0
-                }
-            )
-            return
-        }
-        is UserProfileState.Error -> {
-            Box(
-                modifier = Modifier.fillMaxSize().background(CharcoalDark).padding(24.dp),
-                contentAlignment = androidx.compose.ui.Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(Icons.Filled.Warning, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(48.dp))
-                    Text("Could not load profile", color = TextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text(state.message, color = TextMuted, fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    PrimaryButton(text = "Retry", onClick = { refreshTrigger++ })
-                }
-            }
-            return
-        }
-        is UserProfileState.Loaded -> {
-            // Profile is fully completed, continue to Main scaffold
-        }
     }
 
     // Incoming Call Dialog
