@@ -129,8 +129,8 @@ fun BondlyApp(
                 currentUserId = state.userId,
                 repository = repository,
                 initialProfile = null,
-                onProfileCreated = {
-                    authViewModel.retry()
+                onProfileCreated = { completedProfile ->
+                    authViewModel.onProfileCreationSuccess(completedProfile)
                 }
             )
         }
@@ -140,8 +140,8 @@ fun BondlyApp(
                 currentUserId = state.userId,
                 repository = repository,
                 initialProfile = state.profile,
-                onProfileCreated = {
-                    authViewModel.retry()
+                onProfileCreated = { completedProfile ->
+                    authViewModel.onProfileCreationSuccess(completedProfile)
                 }
             )
         }
@@ -151,8 +151,8 @@ fun BondlyApp(
                 currentUserId = state.userId,
                 repository = repository,
                 initialProfile = null,
-                onProfileCreated = {
-                    authViewModel.retry()
+                onProfileCreated = { completedProfile ->
+                    authViewModel.onProfileCreationSuccess(completedProfile)
                 }
             )
         }

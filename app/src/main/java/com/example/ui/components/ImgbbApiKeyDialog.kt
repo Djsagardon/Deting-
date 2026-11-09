@@ -63,7 +63,7 @@ fun ImgbbApiKeyDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "ImgBB API Settings",
+                            text = "Photo Upload Settings",
                             color = TextWhite,
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp
@@ -77,7 +77,7 @@ fun ImgbbApiKeyDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Bondly uploads images directly to the official ImgBB API (api.imgbb.com/1/upload).",
+                    text = "Bondly securely uploads and optimizes profile photos for your account.",
                     color = TextLightGrey,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -86,7 +86,7 @@ fun ImgbbApiKeyDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "ImgBB API Key:",
+                    text = "Upload Server Key:",
                     color = TextWhite,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp
@@ -97,7 +97,7 @@ fun ImgbbApiKeyDialog(
                 OutlinedTextField(
                     value = inputKey,
                     onValueChange = { inputKey = it.trim() },
-                    placeholder = { Text("Enter your 32-character ImgBB API Key", color = TextMuted, fontSize = 12.sp) },
+                    placeholder = { Text("Enter your upload server key", color = TextMuted, fontSize = 12.sp) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = CharcoalDark,
@@ -142,7 +142,7 @@ fun ImgbbApiKeyDialog(
                             strokeWidth = 2.dp
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Verifying ImgBB...", color = TextWhite, fontSize = 12.sp)
+                        Text("Testing connection...", color = TextWhite, fontSize = 12.sp)
                     } else {
                         Icon(
                             imageVector = Icons.Default.NetworkCheck,
@@ -151,7 +151,7 @@ fun ImgbbApiKeyDialog(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Verify API Key", color = TextWhite, fontSize = 12.sp)
+                        Text("Test Connection", color = TextWhite, fontSize = 12.sp)
                     }
                 }
 

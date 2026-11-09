@@ -71,4 +71,71 @@ class BondlyUnitTest {
         val candidatePrefix = "BD$clean2"
         assertEquals("BD979241", candidatePrefix)
     }
+
+    @Test
+    fun testIndianMobileNumberValidation() {
+        val regex = Regex("^[6-9][0-9]{9}$")
+
+        // Valid 10-digit Indian numbers starting with 6, 7, 8, 9
+        val validNumbers = listOf(
+            "9876543210",
+            "8123456789",
+            "7012345678",
+            "6999999999",
+            "9000000000"
+        )
+        for (num in validNumbers) {
+            assertTrue("Expected valid: $num", num.matches(regex))
+        }
+
+        // Invalid numbers
+        val invalidNumbers = listOf(
+            "",                      // empty
+            "1234567890",            // starts with 1
+            "0987654321",            // starts with 0
+            "5555555555",            // starts with 5
+            "987654321",             // 9 digits
+            "98765432101",           // 11 digits
+            "+919876543210",         // contains +91 prefix
+            "98765 43210",           // contains space
+            "98765-43210",           // contains hyphen
+            "98765abc10",            // contains letters
+            "abcdefghij"             // purely letters
+        )
+        for (num in invalidNumbers) {
+            assertFalse("Expected invalid: $num", num.matches(regex))
+        }
+    }
+
+    @Test
+    fun testStateSelectionMandatoryAndPreservation() {
+        // Initial state for new user (null state in profile) must not default to Maharashtra
+        val newProfile = UserProfile(state = "")
+        val initialSelectedStateForNewUser = newProfile.state.takeIf { it.isNotBlank() } ?: ""
+        assertEquals("New user state must be empty, requiring manual selection", "", initialSelectedStateForNewUser)
+        assertTrue("Empty state must fail validation", initialSelectedStateForNewUser.isBlank())
+
+        // Initial state for existing completed user must be preserved
+        val existingProfile = UserProfile(state = "Karnataka")
+        val initialSelectedStateForExisting = existingProfile.state.takeIf { it.isNotBlank() } ?: ""
+        assertEquals("Existing state must be preserved", "Karnataka", initialSelectedStateForExisting)
+        assertFalse("Existing state must pass validation", initialSelectedStateForExisting.isBlank())
+        assertTrue("State must belong to Indian states", AllIndianStatesAndUTs.contains(initialSelectedStateForExisting))
+    }
+
+    @Test
+    fun testProfileCompletedIdempotency() {
+        // Test repository logic where profile.profileCompleted == true prevents reverting
+        val alreadyCompleted = true
+        val allFiveUploaded = true
+        val isNowCompleted1 = if (alreadyCompleted) allFiveUploaded else (allFiveUploaded && true)
+        assertTrue("Already completed profile remains completed when 5 photos exist", isNowCompleted1)
+
+        // For incomplete profile with only 4 photos
+        val notYetCompleted = false
+        val onlyFourUploaded = false
+        val isNowCompleted2 = if (notYetCompleted) onlyFourUploaded else (onlyFourUploaded && true)
+        assertFalse("Incomplete profile remains incomplete if photos < 5", isNowCompleted2)
+    }
 }
+

@@ -51,6 +51,7 @@ class AuthViewModel(
     private var profileListenerRegistration: ListenerRegistration? = null
     private var timeoutJob: Job? = null
     private var currentFirebaseUser: FirebaseUser? = null
+    private var isProfileAlreadyCompleted: Boolean = false
 
     init {
         listenToAuthChanges()
@@ -61,6 +62,7 @@ class AuthViewModel(
             val user = auth.currentUser
             currentFirebaseUser = user
             if (user == null) {
+                isProfileAlreadyCompleted = false
                 cleanupProfileListener()
                 _authState.value = AppAuthState.Unauthenticated
             } else {
@@ -73,7 +75,9 @@ class AuthViewModel(
 
     fun resolveUserProfile(user: FirebaseUser) {
         if (!NetworkConnectivityManager.isConnected()) {
-            _authState.value = AppAuthState.NetworkUnavailable
+            if (!isProfileAlreadyCompleted && _authState.value !is AppAuthState.AuthenticatedProfileCompleted) {
+                _authState.value = AppAuthState.NetworkUnavailable
+            }
             return
         }
 
@@ -107,6 +111,10 @@ class AuthViewModel(
                 timeoutJob = null
 
                 if (error != null) {
+                    // Prevent transient network/permission errors from demoting an already completed session
+                    if (isProfileAlreadyCompleted || _authState.value is AppAuthState.AuthenticatedProfileCompleted) {
+                        return@addSnapshotListener
+                    }
                     if (!NetworkConnectivityManager.isConnected()) {
                         _authState.value = AppAuthState.NetworkUnavailable
                     } else {
@@ -119,6 +127,10 @@ class AuthViewModel(
                 }
 
                 if (snapshot == null || !snapshot.exists()) {
+                    // Do not downgrade a confirmed completed user due to temporary null snapshot
+                    if (isProfileAlreadyCompleted || _authState.value is AppAuthState.AuthenticatedProfileCompleted) {
+                        return@addSnapshotListener
+                    }
                     // Fresh account - profile document not created yet
                     _authState.value = AppAuthState.AuthenticatedProfileNotCreated(
                         userId = user.uid,
@@ -137,18 +149,27 @@ class AuthViewModel(
                 }
 
                 if (profile == null) {
+                    if (isProfileAlreadyCompleted || _authState.value is AppAuthState.AuthenticatedProfileCompleted) {
+                        return@addSnapshotListener
+                    }
                     _authState.value = AppAuthState.AuthenticatedProfileNotCreated(
                         userId = user.uid,
                         email = user.email ?: ""
                     )
-                } else if (!profile.profileCompleted || profile.profilePhotoUrls.size < 5) {
-                    // Mandatory 5 photos and profile completion flag required
-                    _authState.value = AppAuthState.AuthenticatedProfileIncomplete(
+                } else if (profile.profileCompleted && profile.profilePhotoUrls.size >= 5) {
+                    isProfileAlreadyCompleted = true
+                    _authState.value = AppAuthState.AuthenticatedProfileCompleted(
                         userId = user.uid,
                         profile = profile
                     )
                 } else {
-                    _authState.value = AppAuthState.AuthenticatedProfileCompleted(
+                    // Incomplete profile in Firestore (less than 5 photos or profileCompleted == false).
+                    // CRITICAL: If the user has ALREADY completed onboarding and entered the Main App,
+                    // do NOT allow background presence updates, token syncs or transient writes to reset them back to Incomplete!
+                    if (isProfileAlreadyCompleted || _authState.value is AppAuthState.AuthenticatedProfileCompleted) {
+                        return@addSnapshotListener
+                    }
+                    _authState.value = AppAuthState.AuthenticatedProfileIncomplete(
                         userId = user.uid,
                         profile = profile
                     )
@@ -159,13 +180,14 @@ class AuthViewModel(
     fun onProfileCreationSuccess(profile: UserProfile) {
         val user = currentFirebaseUser ?: Firebase.auth.currentUser
         if (user != null) {
+            isProfileAlreadyCompleted = true
             _authState.value = AppAuthState.AuthenticatedProfileCompleted(user.uid, profile)
         }
     }
 
     fun setProfileSetupStep(step: Int) {
         val user = currentFirebaseUser ?: Firebase.auth.currentUser
-        if (user != null) {
+        if (user != null && !isProfileAlreadyCompleted) {
             _authState.value = AppAuthState.ProfileSetupInProgress(user.uid, step)
         }
     }
@@ -180,6 +202,7 @@ class AuthViewModel(
     }
 
     fun signOut() {
+        isProfileAlreadyCompleted = false
         cleanupProfileListener()
         Firebase.auth.signOut()
         currentFirebaseUser = null

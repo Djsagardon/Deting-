@@ -159,7 +159,7 @@ class ImageUploadRepository(private val context: Context? = null) {
                 isReachable = true,
                 statusCode = 0,
                 isHealthy = false,
-                message = "ImgBB API Key is not configured. Please provide your ImgBB API key."
+                message = "Photo upload server key is not configured. Please enter a server key."
             )
         }
 
@@ -181,20 +181,20 @@ class ImageUploadRepository(private val context: Context? = null) {
                     isReachable = true,
                     statusCode = response.code,
                     isHealthy = true,
-                    message = "Connected to ImgBB API successfully. Key configured (${apiKey.take(4)}****)."
+                    message = "Connected to photo upload server successfully. Key configured (${apiKey.take(4)}****)."
                 )
             } else {
                 ServerHealthResult(
                     isReachable = true,
                     statusCode = response?.code ?: 0,
                     isHealthy = true,
-                    message = "ImgBB API is reachable. Key is set (${apiKey.take(4)}****)."
+                    message = "Photo upload server is reachable. Key is set (${apiKey.take(4)}****)."
                 )
             }
         } catch (e: Exception) {
             ServerHealthResult(
                 isReachable = false,
-                message = "Unable to connect to ImgBB API: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                message = "Unable to connect to upload server: ${e.localizedMessage ?: e.javaClass.simpleName}"
             )
         }
     }
@@ -223,7 +223,7 @@ class ImageUploadRepository(private val context: Context? = null) {
         // 2. Validate ImgBB API key
         val apiKey = ImageUploadConfig.getApiKey(appContext)
         if (apiKey.isBlank()) {
-            val msg = "ImgBB API Key is missing. Please configure your ImgBB API key to enable photo uploads."
+            val msg = "Photo upload server key is missing. Please configure your server key to enable photo uploads."
             Log.e(TAG, msg)
             return@withContext Result.failure(Exception(msg))
         }
@@ -274,12 +274,12 @@ class ImageUploadRepository(private val context: Context? = null) {
                 }
 
                 val diagnosticMsg = when (responseCode) {
-                    400 -> if (errorMsg.isNotBlank()) "ImgBB Bad Request: $errorMsg" else "ImgBB Bad Request (HTTP 400): Image format invalid or empty."
-                    401, 403 -> "ImgBB Authentication Error: Invalid or expired API key. Please check your ImgBB API key."
-                    413 -> "File Too Large: The selected image exceeds ImgBB maximum upload size."
-                    429 -> "Rate Limited: Too many uploads to ImgBB. Please wait a minute and retry."
-                    500, 502, 503, 504 -> "ImgBB Server Error ($responseCode): ImgBB is temporarily unavailable. Please retry."
-                    else -> if (errorMsg.isNotBlank()) "Upload failed: $errorMsg" else "ImgBB upload failed with HTTP $responseCode."
+                    400 -> if (errorMsg.isNotBlank()) "Upload failed: $errorMsg" else "Upload failed (HTTP 400): Image format invalid or empty."
+                    401, 403 -> "Authentication Error: Invalid or expired upload key. Please check your upload server key."
+                    413 -> "File Too Large: The selected image exceeds maximum upload size."
+                    429 -> "Rate Limited: Too many uploads. Please wait a minute and retry."
+                    500, 502, 503, 504 -> "Server Error ($responseCode): Photo upload server is temporarily unavailable. Please retry."
+                    else -> if (errorMsg.isNotBlank()) "Upload failed: $errorMsg" else "Photo upload failed with HTTP $responseCode."
                 }
 
                 Log.e(TAG, "Upload failed [HTTP $responseCode]: $diagnosticMsg | Body: $responseBody")
@@ -295,16 +295,16 @@ class ImageUploadRepository(private val context: Context? = null) {
             Log.e(TAG, "Exception uploading image to ImgBB: ${e.message}", e)
             val friendlyMsg = when (e) {
                 is java.net.UnknownHostException -> {
-                    "DNS Error: Unable to resolve api.imgbb.com. Please check your internet connection."
+                    "DNS Error: Unable to reach photo upload server. Please check your internet connection."
                 }
                 is java.net.ConnectException -> {
-                    "Connection Error: Could not connect to ImgBB server. Please check your internet connection."
+                    "Connection Error: Could not connect to photo upload server. Please check your internet connection."
                 }
                 is java.net.SocketTimeoutException -> {
-                    "Timeout Error: ImgBB connection timed out. Please check your internet connection and try again."
+                    "Timeout Error: Photo upload connection timed out. Please check your internet connection and try again."
                 }
                 is javax.net.ssl.SSLException -> {
-                    "SSL Error: Secure connection to ImgBB could not be established."
+                    "SSL Error: Secure connection to upload server could not be established."
                 }
                 else -> {
                     e.localizedMessage ?: "Upload failed unexpectedly (${e.javaClass.simpleName})"

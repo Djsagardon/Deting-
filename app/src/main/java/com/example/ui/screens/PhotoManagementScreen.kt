@@ -96,11 +96,15 @@ fun PhotoManagementScreen(
         // Only save if the URLs have genuinely changed
         if (successfulUrls != profile.profilePhotoUrls) {
             val allFiveCompleted = successfulUrls.size == ProfilePhotoUploadManager.MAX_SLOTS
-            val isNowCompleted = allFiveCompleted &&
-                    profile.displayName.isNotBlank() &&
-                    profile.gender.isNotBlank() &&
-                    profile.age >= 18 &&
-                    profile.rulesAccepted
+            val isNowCompleted = if (profile.profileCompleted) {
+                allFiveCompleted
+            } else {
+                allFiveCompleted &&
+                        profile.displayName.isNotBlank() &&
+                        profile.gender.isNotBlank() &&
+                        profile.age >= 18 &&
+                        profile.rulesAccepted
+            }
 
             val updatedProfile = profile.copy(
                 profilePhotoUrls = successfulUrls,
@@ -147,7 +151,7 @@ fun PhotoManagementScreen(
                     }
                 },
                 actions = {
-                    // ImgBB API Diagnostics & Settings button
+                    // Photo Server Diagnostics & Settings button
                     IconButton(
                         onClick = {
                             currentApiKey = ImageUploadConfig.getApiKey(context)
@@ -164,7 +168,7 @@ fun PhotoManagementScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CloudQueue,
-                                contentDescription = "ImgBB API Settings",
+                                contentDescription = "Photo Upload Settings",
                                 tint = if (isApiKeyMissing) WarningOrange else TextWhite
                             )
                         }
@@ -205,13 +209,13 @@ fun PhotoManagementScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "ImgBB API Key Not Configured",
+                                text = "Photo Server Configuration",
                                 color = TextWhite,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp
                             )
                             Text(
-                                text = "Direct ImgBB uploads require an API key. Tap to configure.",
+                                text = "Photo uploading requires server setup. Tap to configure.",
                                 color = TextLightGrey,
                                 fontSize = 11.sp
                             )
@@ -367,13 +371,13 @@ fun PhotoManagementScreen(
             onSaveKey = { newKey ->
                 ImageUploadConfig.setApiKey(context, newKey)
                 currentApiKey = ImageUploadConfig.getApiKey(context)
-                Toast.makeText(context, "ImgBB API key saved!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Upload key saved successfully!", Toast.LENGTH_SHORT).show()
                 showImgbbSettingsDialog = false
             },
             onResetToDefault = {
                 ImageUploadConfig.resetApiKey(context)
                 currentApiKey = ImageUploadConfig.getApiKey(context)
-                Toast.makeText(context, "Reset to build default API key.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Reset to default upload configuration.", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -654,7 +658,7 @@ private fun ImgbbSettingsDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "ImgBB API Settings",
+                            text = "Photo Upload Settings",
                             color = TextWhite,
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp
@@ -668,7 +672,7 @@ private fun ImgbbSettingsDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Bondly uploads images directly to the official ImgBB API (api.imgbb.com/1/upload).",
+                    text = "Bondly securely uploads and optimizes profile photos for your account.",
                     color = TextLightGrey,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -677,7 +681,7 @@ private fun ImgbbSettingsDialog(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "ImgBB API Key:",
+                    text = "Upload Server Key:",
                     color = TextWhite,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp
@@ -688,7 +692,7 @@ private fun ImgbbSettingsDialog(
                 OutlinedTextField(
                     value = inputKey,
                     onValueChange = { inputKey = it },
-                    placeholder = { Text("Enter your ImgBB API Key", color = TextMuted, fontSize = 12.sp) },
+                    placeholder = { Text("Enter your upload server key", color = TextMuted, fontSize = 12.sp) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = CharcoalDark,
@@ -733,7 +737,7 @@ private fun ImgbbSettingsDialog(
                             strokeWidth = 2.dp
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Verifying ImgBB...", color = TextWhite, fontSize = 12.sp)
+                        Text("Testing connection...", color = TextWhite, fontSize = 12.sp)
                     } else {
                         Icon(
                             imageVector = Icons.Default.NetworkCheck,
@@ -742,7 +746,7 @@ private fun ImgbbSettingsDialog(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Verify API Key", color = TextWhite, fontSize = 12.sp)
+                        Text("Test Connection", color = TextWhite, fontSize = 12.sp)
                     }
                 }
 

@@ -214,19 +214,27 @@ class BondlyRepository(
             val cleanUrls = currentUrls.filter { it.isNotBlank() }
 
             val allFiveCompleted = cleanUrls.size == 5
-            val isNowCompleted = allFiveCompleted &&
-                    profile.displayName.isNotBlank() &&
-                    profile.gender.isNotBlank() &&
-                    profile.age >= 18 &&
-                    profile.rulesAccepted
+            // CRITICAL: If the profile is already completed, never reset profileCompleted to false on a slot update!
+            val isNowCompleted = if (profile.profileCompleted) {
+                allFiveCompleted
+            } else {
+                allFiveCompleted &&
+                        profile.displayName.isNotBlank() &&
+                        profile.gender.isNotBlank() &&
+                        profile.age >= 18 &&
+                        profile.rulesAccepted
+            }
 
-            val updatePayload = mapOf(
+            val updatePayload = mutableMapOf<String, Any>(
                 "userId" to uid,
                 "profilePhotoUrls" to cleanUrls,
                 "totalPhotoCount" to cleanUrls.size,
-                "profileCompleted" to isNowCompleted,
                 "updatedAt" to Timestamp.now()
             )
+            // Only update profileCompleted if it transitioned to true or if already completed
+            if (isNowCompleted || profile.profileCompleted) {
+                updatePayload["profileCompleted"] = isNowCompleted
+            }
             docRef.set(updatePayload, SetOptions.merge()).await()
 
             // Update search index if primary photo changed
@@ -265,11 +273,15 @@ class BondlyRepository(
             val cleanUrls = currentUrls.filter { it.isNotBlank() }
 
             val allFiveCompleted = cleanUrls.size == 5
-            val isNowCompleted = allFiveCompleted &&
-                    profile.displayName.isNotBlank() &&
-                    profile.gender.isNotBlank() &&
-                    profile.age >= 18 &&
-                    profile.rulesAccepted
+            val isNowCompleted = if (profile.profileCompleted) {
+                allFiveCompleted
+            } else {
+                allFiveCompleted &&
+                        profile.displayName.isNotBlank() &&
+                        profile.gender.isNotBlank() &&
+                        profile.age >= 18 &&
+                        profile.rulesAccepted
+            }
 
             val updatePayload = mapOf(
                 "userId" to uid,

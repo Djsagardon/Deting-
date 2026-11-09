@@ -19,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,7 +55,7 @@ fun OnboardingProfileScreen(
     currentUserId: String,
     repository: BondlyRepository,
     initialProfile: UserProfile? = null,
-    onProfileCreated: () -> Unit
+    onProfileCreated: (UserProfile) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -82,7 +84,7 @@ fun OnboardingProfileScreen(
     var birthYear by remember { mutableStateOf("2000") }
     // REQUIREMENT: No gender option selected by default! Must be manually chosen.
     var gender by remember { mutableStateOf(initialProfile?.gender ?: "") }
-    var selectedState by remember { mutableStateOf(initialProfile?.state.takeIf { !it.isNullOrBlank() } ?: "Maharashtra") }
+    var selectedState by remember { mutableStateOf(initialProfile?.state?.takeIf { it.isNotBlank() } ?: "") }
     var city by remember { mutableStateOf(initialProfile?.city ?: "") }
     var stateDropdownExpanded by remember { mutableStateOf(false) }
     var bio by remember { mutableStateOf(initialProfile?.bio ?: "") }
@@ -384,6 +386,7 @@ fun OnboardingProfileScreen(
                                                 value = selectedState,
                                                 onValueChange = {},
                                                 readOnly = true,
+                                                placeholder = { Text("Select your state", color = TextMuted) },
                                                 trailingIcon = {
                                                     IconButton(onClick = { stateDropdownExpanded = true }) {
                                                         Icon(Icons.Filled.ArrowDropDown, contentDescription = "Select State", tint = TextLightGrey)
@@ -502,30 +505,47 @@ fun OnboardingProfileScreen(
 
                                 Spacer(modifier = Modifier.height(4.dp))
 
+                                val isMobileFormatValid = mobileNumber.matches(Regex("^[6-9][0-9]{9}$"))
+                                val showMobileFormatError = mobileNumber.isNotEmpty() && !isMobileFormatValid
+
                                 OutlinedTextField(
                                     value = mobileNumber,
-                                    onValueChange = {
-                                        mobileNumber = it
-                                        // Reset confirmation if user modifies their number
-                                        if (isMobileConfirmed) {
-                                            isMobileConfirmed = false
-                                            generatedOtpCode = null
-                                            showInAppOtpBanner = false
+                                    onValueChange = { input ->
+                                        if (input.length <= 10 && input.all { it.isDigit() }) {
+                                            mobileNumber = input
+                                            // Reset confirmation if user modifies their number
+                                            if (isMobileConfirmed) {
+                                                isMobileConfirmed = false
+                                                generatedOtpCode = null
+                                                showInAppOtpBanner = false
+                                            }
                                         }
                                     },
-                                    placeholder = { Text("+91 XXXXX XXXXX", color = TextMuted) },
+                                    placeholder = { Text("Enter 10-digit mobile number", color = TextMuted) },
                                     modifier = Modifier.fillMaxWidth().testTag("onboarding_mobile_input"),
                                     shape = RoundedCornerShape(14.dp),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    isError = showMobileFormatError,
                                     colors = OutlinedTextFieldDefaults.colors(
                                         focusedContainerColor = CharcoalCard,
                                         unfocusedContainerColor = CharcoalCard,
                                         focusedBorderColor = BondlyPink,
                                         unfocusedBorderColor = CharcoalBorder,
+                                        errorBorderColor = ErrorRed,
                                         focusedTextColor = TextWhite,
                                         unfocusedTextColor = TextWhite
                                     ),
                                     leadingIcon = { Icon(Icons.Filled.Phone, contentDescription = null, tint = BondlyPink) }
                                 )
+
+                                if (showMobileFormatError) {
+                                    Text(
+                                        text = "Please enter a valid 10-digit mobile number.",
+                                        color = ErrorRed,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                                    )
+                                }
 
                                 if (isMobileConfirmed) {
                                     // Successfully confirmed status
@@ -551,7 +571,7 @@ fun OnboardingProfileScreen(
                                     // Action to generate in-app code
                                     SecondaryButton(
                                         text = if (generatedOtpCode == null) "Generate In-App Confirmation Code" else "Resend Code (${if (otpCooldownSeconds > 0) "${otpCooldownSeconds}s" else "Ready"})",
-                                        enabled = mobileNumber.trim().length >= 10 && otpCooldownSeconds == 0,
+                                        enabled = isMobileFormatValid && otpCooldownSeconds == 0,
                                         onClick = {
                                             val freshCode = Random.nextInt(100000, 999999).toString()
                                             generatedOtpCode = freshCode
@@ -675,7 +695,7 @@ fun OnboardingProfileScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text("5 Profile Photos (Mandatory)", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextWhite)
-                                        Text("Select all 5 together or one by one. Direct upload via ImgBB.", fontSize = 12.sp, color = TextMuted)
+                                        Text("Select all 5 together or one by one. High-resolution direct upload.", fontSize = 12.sp, color = TextMuted)
                                     }
                                 }
 
@@ -694,8 +714,8 @@ fun OnboardingProfileScreen(
                                             Icon(Icons.Default.Key, contentDescription = null, tint = WarningOrange, modifier = Modifier.size(24.dp))
                                             Spacer(modifier = Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text("ImgBB API Key Required", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                                Text("Direct photo upload requires an ImgBB API key. Tap here to configure.", color = TextLightGrey, fontSize = 11.sp)
+                                                Text("Photo Upload Server Configuration", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text("Direct photo upload requires server configuration. Tap here to configure.", color = TextLightGrey, fontSize = 11.sp)
                                             }
                                             TextButton(onClick = { showImgbbKeyDialog = true }) {
                                                 Text("Configure", color = WarningOrange, fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -710,7 +730,7 @@ fun OnboardingProfileScreen(
                                     ) {
                                         Icon(Icons.Default.CheckCircle, contentDescription = null, tint = OnlineGreen, modifier = Modifier.size(14.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("ImgBB Key Configured (${currentImgbbKey.take(4)}****)", color = OnlineGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        Text("Upload Server Key Configured (${currentImgbbKey.take(4)}****)", color = OnlineGreen, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Update", color = BondlyPink, fontSize = 11.sp)
                                     }
@@ -750,7 +770,7 @@ fun OnboardingProfileScreen(
                                                         shape = RoundedCornerShape(8.dp),
                                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                                     ) {
-                                                        Text("Set ImgBB Key", fontSize = 11.sp, color = TextWhite)
+                                                        Text("Server Settings", fontSize = 11.sp, color = TextWhite)
                                                     }
                                                 }
                                             }
@@ -793,7 +813,7 @@ fun OnboardingProfileScreen(
                                             )
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Text(
-                                                text = "Uploading photos directly to ImgBB and confirming with server...",
+                                                text = "Uploading photos and confirming with server...",
                                                 fontSize = 11.sp,
                                                 color = TextLightGrey
                                             )
@@ -1101,8 +1121,8 @@ fun OnboardingProfileScreen(
                                     }
 
                                     2 -> {
-                                        if (mobileNumber.trim().length < 10) {
-                                            errorMessage = "Please enter a valid mobile number (at least 10 digits)."
+                                        if (!mobileNumber.trim().matches(Regex("^[6-9][0-9]{9}$"))) {
+                                            errorMessage = "Please enter a valid 10-digit mobile number."
                                             return@PrimaryButton
                                         }
                                         if (!isMobileConfirmed) {
@@ -1128,6 +1148,16 @@ fun OnboardingProfileScreen(
                                     }
 
                                     4 -> {
+                                        if (selectedState.isBlank()) {
+                                            errorMessage = "Please select your state."
+                                            return@PrimaryButton
+                                        }
+
+                                        if (!mobileNumber.trim().matches(Regex("^[6-9][0-9]{9}$"))) {
+                                            errorMessage = "Please enter a valid 10-digit mobile number."
+                                            return@PrimaryButton
+                                        }
+
                                         if (!hasAcceptedRules) {
                                             errorMessage = "You must accept the Community Rules to continue."
                                             return@PrimaryButton
@@ -1181,7 +1211,7 @@ fun OnboardingProfileScreen(
                                                 val saveResult = repository.saveProfile(profileToSave)
                                                 isSaving = false
                                                 if (saveResult.isSuccess) {
-                                                    onProfileCreated()
+                                                    onProfileCreated(profileToSave)
                                                 } else {
                                                     val err = saveResult.exceptionOrNull()
                                                     errorMessage = com.example.util.BondlyErrorClassifier.getUserFriendlyMessage(err)
@@ -1304,14 +1334,14 @@ fun OnboardingProfileScreen(
                     ImageUploadConfig.setApiKey(context, newKey)
                     currentImgbbKey = newKey
                     showImgbbKeyDialog = false
-                    Toast.makeText(context, "ImgBB API Key saved successfully", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Upload key saved successfully", Toast.LENGTH_SHORT).show()
                     uploadManager.retryAllFailed(context, currentUserId)
                 },
                 onResetToDefault = {
                     ImageUploadConfig.resetApiKey(context)
                     currentImgbbKey = ImageUploadConfig.getApiKey(context)
                     showImgbbKeyDialog = false
-                    Toast.makeText(context, "Reset to build default API key", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Reset to default upload configuration", Toast.LENGTH_SHORT).show()
                 }
             )
         }
