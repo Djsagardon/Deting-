@@ -62,10 +62,78 @@ class BondlyRepository(
         if (!NetworkConnectivityManager.isConnected()) return null
         return try {
             val snap = firestore.collection("users").document(uid).get(Source.SERVER).await()
-            snap.toObject(UserProfile::class.java)
+            UserProfileParser.fromSnapshot(snap)
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Authoritative live server fetch for login/startup resolution.
+     * Distinguishes strictly between Completed, Incomplete, NotCreated, and real Errors
+     * so network or permission errors NEVER falsely trigger new-user onboarding.
+     */
+    suspend fun fetchUserProfileResolution(uid: String): Result<ProfileResolutionResult> {
+        if (uid.isBlank()) {
+            return Result.failure(IllegalArgumentException("Authenticated UID is empty"))
+        }
+        if (!NetworkConnectivityManager.isConnected()) {
+            return Result.failure(NoInternetException("No internet connection. Please connect to the internet and try again."))
+        }
+        return try {
+            val docRef = firestore.collection("users").document(uid)
+            val snap = docRef.get(Source.SERVER).await()
+            if (!snap.exists()) {
+                Result.success(ProfileResolutionResult.NotCreated)
+            } else {
+                val raw = snap.data ?: emptyMap()
+                val profile = UserProfileParser.fromSnapshot(snap)
+                if (profile == null) {
+                    Result.success(ProfileResolutionResult.NotCreated)
+                } else {
+                    val backfill = UserProfileParser.needsNonDestructiveBackfill(raw, profile)
+                    if (backfill != null) {
+                        try {
+                            docRef.set(backfill, SetOptions.merge()).await()
+                        } catch (e: Exception) {
+                            Log.w("BondlyRepo", "Non-destructive schema backfill skipped: ${e.message}")
+                        }
+                    }
+                    Result.success(UserProfileParser.evaluateProfile(profile))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Attaches a real-time listener on users/{uid} parsed safely with UserProfileParser.
+     */
+    fun listenToProfileResolution(
+        uid: String,
+        onResolution: (ProfileResolutionResult) -> Unit,
+        onError: (Exception) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration {
+        return firestore.collection("users").document(uid)
+            .addSnapshotListener(MetadataChanges.EXCLUDE) { snapshot, error ->
+                if (error != null) {
+                    onError(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    if (snapshot != null && snapshot.metadata.isFromCache && !NetworkConnectivityManager.isConnected()) {
+                        return@addSnapshotListener
+                    }
+                    onResolution(ProfileResolutionResult.NotCreated)
+                    return@addSnapshotListener
+                }
+                if (snapshot.metadata.isFromCache && !NetworkConnectivityManager.isConnected()) {
+                    return@addSnapshotListener
+                }
+                val profile = UserProfileParser.fromSnapshot(snapshot)
+                onResolution(UserProfileParser.evaluateProfile(profile))
+            }
     }
 
     fun observeProfile(uid: String = currentUid): Flow<UserProfile?> = callbackFlow {
@@ -85,15 +153,7 @@ class BondlyRepository(
                         // Do not present stale cached data when offline
                         return@addSnapshotListener
                     }
-                    val profile = snapshot.toObject(UserProfile::class.java)?.let { p ->
-                        val mId = snapshot.getString("memberId") ?: snapshot.getString("publicUserId") ?: ""
-                        p.copy(
-                            userId = if (p.userId.isNotBlank()) p.userId else snapshot.id,
-                            memberId = if (p.memberId.isNotBlank()) p.memberId else mId,
-                            publicUserId = if (p.publicUserId.isNotBlank()) p.publicUserId else mId
-                        )
-                    }
-                    trySend(profile)
+                    trySend(UserProfileParser.fromSnapshot(snapshot))
                 }
             }
         awaitClose { reg.remove() }
@@ -123,33 +183,24 @@ class BondlyRepository(
                 if (snapshot.metadata.isFromCache && !NetworkConnectivityManager.isConnected()) {
                     return@addSnapshotListener
                 }
-                val profile = snapshot.toObject(UserProfile::class.java)?.let { p ->
-                    val mId = snapshot.getString("memberId") ?: snapshot.getString("publicUserId") ?: ""
-                    p.copy(
-                        userId = if (p.userId.isNotBlank()) p.userId else snapshot.id,
-                        memberId = if (p.memberId.isNotBlank()) p.memberId else mId,
-                        publicUserId = if (p.publicUserId.isNotBlank()) p.publicUserId else mId
-                    )
-                }
-                if (profile == null) {
-                    trySend(UserProfileState.NotFound)
-                } else if (!profile.profileCompleted || profile.profilePhotoUrls.size < 5) {
-                    trySend(UserProfileState.Incomplete(profile))
-                } else {
-                    trySend(UserProfileState.Loaded(profile))
+                when (val resolution = UserProfileParser.evaluateProfile(UserProfileParser.fromSnapshot(snapshot))) {
+                    is ProfileResolutionResult.NotCreated -> trySend(UserProfileState.NotFound)
+                    is ProfileResolutionResult.Incomplete -> trySend(UserProfileState.Incomplete(resolution.profile))
+                    is ProfileResolutionResult.Completed -> trySend(UserProfileState.Loaded(resolution.profile))
                 }
             }
         awaitClose { reg.remove() }
     }
 
     /**
-     * Updates user presence status in Firestore.
+     * Updates user presence status in Firestore without disturbing profile fields.
      */
     suspend fun setUserOnline(isOnline: Boolean): Result<Unit> {
         val uid = currentUid
         if (uid.isEmpty()) return Result.success(Unit)
         return try {
             val updates = mapOf(
+                "userId" to uid,
                 "isOnline" to isOnline,
                 "lastActiveAt" to Timestamp.now()
             )
@@ -168,17 +219,27 @@ class BondlyRepository(
             val uid = profile.userId.ifEmpty { currentUid }
             if (uid.isEmpty()) return Result.failure(Exception("Not logged in"))
 
-            val level = UserLevelManager.calculateLevel(profile)
-            val assignedMemberId = if (profile.effectiveMemberId.isNotBlank()) {
-                profile.effectiveMemberId
-            } else {
-                allocateUniqueMemberId(uid)
-            }
+            // Fetch existing server state to prevent overwriting immutable/earned fields (Member ID, level, role, createdAt)
+            val existing = try {
+                val snap = firestore.collection("users").document(uid).get(Source.SERVER).await()
+                UserProfileParser.fromSnapshot(snap)
+            } catch (_: Exception) { null }
+
+            val calculatedLevel = UserLevelManager.calculateLevel(profile)
+            val preservedLevel = maxOf(existing?.userLevel ?: 1, maxOf(profile.userLevel, calculatedLevel))
+            val assignedMemberId = existing?.effectiveMemberId?.takeIf { it.isNotBlank() }
+                ?: profile.effectiveMemberId.takeIf { it.isNotBlank() }
+                ?: allocateUniqueMemberId(uid)
+
             val updated = profile.copy(
                 userId = uid,
                 memberId = assignedMemberId,
                 publicUserId = assignedMemberId,
-                userLevel = level,
+                userLevel = preservedLevel,
+                role = existing?.role?.takeIf { it.isNotBlank() } ?: profile.role,
+                accountStatus = existing?.accountStatus?.takeIf { it.isNotBlank() } ?: profile.accountStatus,
+                activeDaysCount = maxOf(existing?.activeDaysCount ?: 1, profile.activeDaysCount),
+                createdAt = existing?.createdAt ?: profile.createdAt ?: Timestamp.now(),
                 updatedAt = Timestamp.now()
             )
             firestore.collection("users").document(uid).set(updated, SetOptions.merge()).await()
@@ -205,7 +266,7 @@ class BondlyRepository(
             } catch (_: Exception) {
                 null
             }
-            val profile = snap?.toObject(UserProfile::class.java) ?: UserProfile(userId = uid)
+            val profile = UserProfileParser.fromSnapshot(snap) ?: UserProfile(userId = uid)
             val currentUrls = profile.profilePhotoUrls.toMutableList()
             while (currentUrls.size <= slotIndex) {
                 currentUrls.add("")
@@ -265,7 +326,7 @@ class BondlyRepository(
             } catch (_: Exception) {
                 null
             }
-            val profile = snap?.toObject(UserProfile::class.java) ?: UserProfile(userId = uid)
+            val profile = UserProfileParser.fromSnapshot(snap) ?: UserProfile(userId = uid)
             val currentUrls = profile.profilePhotoUrls.toMutableList()
             if (slotIndex in currentUrls.indices) {
                 currentUrls.removeAt(slotIndex)
@@ -315,16 +376,12 @@ class BondlyRepository(
             throw NoInternetException("No internet connection. Please connect to the internet and try again.")
         }
 
-        // 1. Check if user already possesses a Member ID
+        // 1. Check if user already possesses a Member ID (including legacy field names)
         try {
             val userSnap = firestore.collection("users").document(uid).get(Source.SERVER).await()
-            val existingMemberId = userSnap.getString("memberId")?.trim()
-            if (!existingMemberId.isNullOrEmpty()) {
-                return existingMemberId
-            }
-            val existingPublicId = userSnap.getString("publicUserId")?.trim()
-            if (!existingPublicId.isNullOrEmpty()) {
-                return existingPublicId
+            val parsed = UserProfileParser.fromSnapshot(userSnap)
+            if (parsed != null && parsed.effectiveMemberId.isNotBlank()) {
+                return parsed.effectiveMemberId
             }
         } catch (_: Exception) {}
 
@@ -437,12 +494,11 @@ class BondlyRepository(
                     .limit(1).get(Source.SERVER).await()
                 val doc = qSnap.documents.firstOrNull()
                 if (doc != null) {
-                    val p = doc.toObject(UserProfile::class.java)?.let {
-                        val mId = doc.getString("memberId") ?: doc.getString("publicUserId") ?: candidate
-                        it.copy(
-                            userId = if (it.userId.isNotBlank()) it.userId else doc.id,
-                            memberId = if (it.memberId.isNotBlank()) it.memberId else mId,
-                            publicUserId = if (it.publicUserId.isNotBlank()) it.publicUserId else mId
+                    val p = UserProfileParser.fromSnapshot(doc)?.let { parsed ->
+                        val mId = parsed.effectiveMemberId.ifBlank { candidate }
+                        parsed.copy(
+                            memberId = parsed.memberId.ifBlank { mId },
+                            publicUserId = parsed.publicUserId.ifBlank { mId }
                         )
                     }
                     if (p != null) {
@@ -467,12 +523,11 @@ class BondlyRepository(
                     .limit(1).get(Source.SERVER).await()
                 val doc = qSnap.documents.firstOrNull()
                 if (doc != null) {
-                    val p = doc.toObject(UserProfile::class.java)?.let {
-                        val mId = doc.getString("memberId") ?: doc.getString("publicUserId") ?: candidate
-                        it.copy(
-                            userId = if (it.userId.isNotBlank()) it.userId else doc.id,
-                            memberId = if (it.memberId.isNotBlank()) it.memberId else mId,
-                            publicUserId = if (it.publicUserId.isNotBlank()) it.publicUserId else mId
+                    val p = UserProfileParser.fromSnapshot(doc)?.let { parsed ->
+                        val mId = parsed.effectiveMemberId.ifBlank { candidate }
+                        parsed.copy(
+                            memberId = parsed.memberId.ifBlank { mId },
+                            publicUserId = parsed.publicUserId.ifBlank { mId }
                         )
                     }
                     if (p != null) {
@@ -515,14 +570,7 @@ class BondlyRepository(
         try {
             val userSnap = firestore.collection("users").document(raw).get(Source.SERVER).await()
             if (userSnap.exists()) {
-                val p = userSnap.toObject(UserProfile::class.java)?.let {
-                    val mId = userSnap.getString("memberId") ?: userSnap.getString("publicUserId") ?: ""
-                    it.copy(
-                        userId = if (it.userId.isNotBlank()) it.userId else userSnap.id,
-                        memberId = if (it.memberId.isNotBlank()) it.memberId else mId,
-                        publicUserId = if (it.publicUserId.isNotBlank()) it.publicUserId else mId
-                    )
-                }
+                val p = UserProfileParser.fromSnapshot(userSnap)
                 if (p != null) {
                     healPublicUserIndex(p)
                     if (!isAdminRequester && p.accountStatus in listOf("banned", "suspended")) return null
@@ -544,9 +592,7 @@ class BondlyRepository(
                     .limit(1).get(Source.SERVER).await()
                 val doc = nameSnap.documents.firstOrNull()
                 if (doc != null) {
-                    val p = doc.toObject(UserProfile::class.java)?.let {
-                        it.copy(userId = if (it.userId.isNotBlank()) it.userId else doc.id)
-                    }
+                    val p = UserProfileParser.fromSnapshot(doc)
                     if (p != null) return p
                 }
             } catch (_: Exception) {}
@@ -754,8 +800,7 @@ class BondlyRepository(
                 }
 
                 val allCandidates = snapshot?.documents?.mapNotNull { doc ->
-                    val p = doc.toObject(UserProfile::class.java)
-                    p?.copy(userId = if (p.userId.isNotBlank()) p.userId else doc.id)
+                    UserProfileParser.fromSnapshot(doc)
                 }?.filter { candidate ->
                     val isNotMe = candidate.userId != myUid
                     val isStatusActive = candidate.accountStatus.equals("active", ignoreCase = true) || candidate.accountStatus.isEmpty()
@@ -1885,6 +1930,7 @@ class BondlyRepository(
         try {
             firestore.collection("users").document(uid).set(
                 mapOf(
+                    "userId" to uid,
                     "fcmTokens" to FieldValue.arrayUnion(token),
                     "lastActiveAt" to Timestamp.now()
                 ),
@@ -1911,7 +1957,7 @@ class BondlyRepository(
                 if (error != null) {
                     firestore.collection("users").limit(100).get(Source.SERVER)
                         .addOnSuccessListener { snap ->
-                            val list = snap.documents.mapNotNull { it.toObject(UserProfile::class.java) }
+                            val list = snap.documents.mapNotNull { UserProfileParser.fromSnapshot(it) }
                             trySend(list)
                         }
                     return@addSnapshotListener
@@ -1920,7 +1966,7 @@ class BondlyRepository(
                     if (snapshot.metadata.isFromCache && !NetworkConnectivityManager.isConnected()) {
                         return@addSnapshotListener
                     }
-                    val list = snapshot.documents.mapNotNull { it.toObject(UserProfile::class.java) }
+                    val list = snapshot.documents.mapNotNull { UserProfileParser.fromSnapshot(it) }
                     trySend(list)
                 }
             }

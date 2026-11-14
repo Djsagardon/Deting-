@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.example.util.NetworkConnectivityManager.initialize(applicationContext)
         enableEdgeToEdge()
         extractNotificationPayload(intent)
         setContent {

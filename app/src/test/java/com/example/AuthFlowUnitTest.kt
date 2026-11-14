@@ -1,20 +1,26 @@
 package com.example
 
+import com.example.data.model.ProfileResolutionResult
 import com.example.data.model.UserProfile
+import com.example.data.model.UserProfileParser
 import com.example.ui.viewmodel.AppAuthState
+import com.google.firebase.Timestamp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * State Transition and LifeCycle Unit Tests for Bondly Auth & Onboarding System.
- * Covers all 9 Critical Auth Flow Scenarios.
+ * Comprehensive Authentication, Legacy Profile Parsing, Navigation & State Transition Unit Tests.
+ * Covers all 10 Critical Login, Legacy Compatibility, Error Handling & Data Preservation Scenarios.
  */
 class AuthFlowUnitTest {
 
-    // Helper State Machine Evaluator mimicking AuthViewModel resolution logic
+    // Evaluates AppAuthState from repository resolution + connectivity/error inputs
     private fun evaluateProfileState(
+        uid: String = "test_user_uid_123",
         isConnected: Boolean,
         documentExists: Boolean,
         profile: UserProfile?,
@@ -34,199 +40,262 @@ class AuthFlowUnitTest {
             return AppAuthState.RequestFailed(message = firestoreError, canRetry = true)
         }
         if (!documentExists || profile == null) {
-            // Document missing: Fresh user account
             return AppAuthState.AuthenticatedProfileNotCreated(
-                userId = "test_user_uid_123",
+                userId = uid,
                 email = "test@bondly.dating"
             )
         }
-        if (!profile.profileCompleted || profile.profilePhotoUrls.size < 5) {
-            // Incomplete: Less than 5 photos or profileCompleted == false
-            return AppAuthState.AuthenticatedProfileIncomplete(
-                userId = "test_user_uid_123",
-                profile = profile
-            )
+        return when (val resolution = UserProfileParser.evaluateProfile(profile)) {
+            is ProfileResolutionResult.Completed -> AppAuthState.AuthenticatedProfileCompleted(uid, resolution.profile)
+            is ProfileResolutionResult.Incomplete -> AppAuthState.AuthenticatedProfileIncomplete(uid, resolution.profile)
+            is ProfileResolutionResult.NotCreated -> AppAuthState.AuthenticatedProfileNotCreated(uid, "test@bondly.dating")
         }
-        return AppAuthState.AuthenticatedProfileCompleted(
-            userId = "test_user_uid_123",
-            profile = profile
+    }
+
+    @Test
+    fun testScenario1_ExistingUserWithCompleteProfileLogsInDirectly() {
+        val completeProfile = UserProfile(
+            userId = "existing_uid_001",
+            memberId = "BD979241",
+            publicUserId = "BD979241",
+            displayName = "Rohit Sharma",
+            gender = "Man",
+            age = 26,
+            state = "Maharashtra",
+            city = "Mumbai",
+            maskedMobileNumber = "9876543210",
+            mobileConfirmationStatus = "in_app_confirmed",
+            profileCompleted = true,
+            profilePhotoUrls = listOf("https://i.ibb.co/1.jpg", "https://i.ibb.co/2.jpg", "https://i.ibb.co/3.jpg", "https://i.ibb.co/4.jpg", "https://i.ibb.co/5.jpg"),
+            rulesAccepted = true,
+            userLevel = 3
         )
-    }
-
-    @Test
-    fun testScenario1_NewUserAuthentication() {
-        val state = AppAuthState.Initializing
-        assertTrue("Initial auth state must be Initializing", state is AppAuthState.Initializing)
-    }
-
-    @Test
-    fun testScenario2_ProfileDocumentDoesNotExist() {
         val resultState = evaluateProfileState(
+            uid = "existing_uid_001",
             isConnected = true,
-            documentExists = false,
-            profile = null
+            documentExists = true,
+            profile = completeProfile
         )
         assertTrue(
-            "Missing document must result in AuthenticatedProfileNotCreated",
-            resultState is AppAuthState.AuthenticatedProfileNotCreated
+            "Existing complete user must go directly to AuthenticatedProfileCompleted",
+            resultState is AppAuthState.AuthenticatedProfileCompleted
         )
-        val notCreated = resultState as AppAuthState.AuthenticatedProfileNotCreated
-        assertEquals("test_user_uid_123", notCreated.userId)
+        val completed = resultState as AppAuthState.AuthenticatedProfileCompleted
+        assertEquals("BD979241", completed.profile.effectiveMemberId)
+        assertEquals(5, completed.profile.profilePhotoUrls.size)
+        assertEquals(3, completed.profile.userLevel)
     }
 
     @Test
-    fun testScenario3_ProfileDocumentIncomplete_MissingPhotos() {
-        val incompleteProfile = UserProfile(
+    fun testScenario2_LegacyFirestoreDocumentWithAlternateFieldNamesAndTypesParsesSafely() {
+        // Simulates a pre-update Firestore document with legacy field names & Long epoch timestamps
+        val legacyMap: Map<String, Any?> = mapOf(
+            // userId missing inside doc body — must fallback to docId
+            "name" to "Priya Verma",
+            "publicUserId" to "BD445566",
+            "gender" to "Woman",
+            "age" to "24", // stored as String in older doc
+            "city" to "Pune",
+            "state" to "Maharashtra",
+            "bio" to "Love travel and music!",
+            "hobbies" to "Travel & Roadtrips, Music & Concerts, Reading",
+            "phoneNumber" to "9812345678",
+            "photoUrls" to listOf(
+                "https://i.ibb.co/a1.jpg",
+                "https://i.ibb.co/a2.jpg",
+                "https://i.ibb.co/a3.jpg",
+                "https://i.ibb.co/a4.jpg",
+                "https://i.ibb.co/a5.jpg"
+            ),
+            // profileCompleted flag absent in legacy doc
+            "termsAccepted" to true,
+            "userLevel" to 2L,
+            "createdAt" to 1700000000000L // Long millis instead of Timestamp
+        )
+
+        val parsed = UserProfileParser.fromMap("legacy_uid_789", legacyMap)
+        assertEquals("legacy_uid_789", parsed.userId)
+        assertEquals("Priya Verma", parsed.displayName)
+        assertEquals("BD445566", parsed.effectiveMemberId)
+        assertEquals(24, parsed.age)
+        assertEquals("9812345678", parsed.maskedMobileNumber)
+        assertEquals(5, parsed.profilePhotoUrls.size)
+        assertEquals(3, parsed.interests.size)
+        assertTrue(parsed.rulesAccepted)
+        assertTrue("Legacy doc with all essential data & 5 photos must evaluate completed", parsed.profileCompleted)
+        assertNotNull(parsed.createdAt)
+
+        val resolution = UserProfileParser.evaluateProfile(parsed)
+        assertTrue(resolution is ProfileResolutionResult.Completed)
+
+        // Verify non-destructive backfill only adds missing normalized keys without touching original Member ID
+        val backfill = UserProfileParser.needsNonDestructiveBackfill(legacyMap, parsed)
+        assertNotNull(backfill)
+        assertEquals("legacy_uid_789", backfill!!["userId"])
+        assertEquals(5, (backfill["profilePhotoUrls"] as List<*>).size)
+        assertFalse(backfill.containsKey("memberId"))
+    }
+
+    @Test
+    fun testScenario3_ExistingUserWithIncompleteProfileResumesAtMissingStepWithoutLosingData() {
+        // Step 1 & Step 2 completed, only 3 photos uploaded -> should resume on Step 3
+        val incompletePhotosProfile = UserProfile(
             userId = "test_user_uid_123",
+            memberId = "BD112233",
             displayName = "Ananya",
+            dob = "10/04/1998",
+            age = 28,
+            gender = "Woman",
+            city = "Jaipur",
+            state = "Rajasthan",
+            bio = "Coffee enthusiast and bookworm.",
+            interests = listOf("Reading", "Coffee & Cafes", "Travel & Roadtrips"),
+            maskedMobileNumber = "9876543210",
+            mobileConfirmationStatus = "in_app_confirmed",
             profileCompleted = true,
-            profilePhotoUrls = listOf("url1", "url2", "url3") // Only 3 photos! Needs 5!
+            profilePhotoUrls = listOf("url1", "url2", "url3")
         )
         val resultState = evaluateProfileState(
             isConnected = true,
             documentExists = true,
-            profile = incompleteProfile
+            profile = incompletePhotosProfile
         )
         assertTrue(
             "Profile with < 5 photos must transition to AuthenticatedProfileIncomplete",
             resultState is AppAuthState.AuthenticatedProfileIncomplete
         )
-        val incomplete = resultState as AppAuthState.AuthenticatedProfileIncomplete
-        assertEquals(3, incomplete.profile.profilePhotoUrls.size)
-        assertFalse(incomplete.profile.profilePhotoUrls.size >= 5)
+        val resolution = UserProfileParser.evaluateProfile(incompletePhotosProfile) as ProfileResolutionResult.Incomplete
+        assertEquals(3, resolution.recommendedStep)
+
+        // Verify DOB parts are preserved rather than reset to 15/08/2000
+        val (d, m, y) = UserProfileParser.extractDobParts(incompletePhotosProfile)
+        assertEquals("10", d)
+        assertEquals("04", m)
+        assertEquals("1998", y)
     }
 
     @Test
-    fun testScenario3b_ProfileDocumentIncomplete_FlagFalse() {
-        val incompleteProfile = UserProfile(
+    fun testScenario3b_ProfileDocumentIncomplete_FlagFalseResumesAtStep4IfPhotosComplete() {
+        val incompleteFlagProfile = UserProfile(
             userId = "test_user_uid_123",
             displayName = "Ananya",
+            age = 25,
+            gender = "Woman",
+            city = "Delhi",
+            state = "Delhi (NCT)",
+            bio = "Hello everyone on Bondly!",
+            interests = listOf("Reading", "Dancing", "Music & Concerts"),
+            maskedMobileNumber = "9876543210",
+            mobileConfirmationStatus = "in_app_confirmed",
             profileCompleted = false,
             profilePhotoUrls = listOf("url1", "url2", "url3", "url4", "url5")
         )
         val resultState = evaluateProfileState(
             isConnected = true,
             documentExists = true,
-            profile = incompleteProfile
+            profile = incompleteFlagProfile
         )
         assertTrue(
             "Profile with profileCompleted = false must transition to AuthenticatedProfileIncomplete",
             resultState is AppAuthState.AuthenticatedProfileIncomplete
         )
+        assertEquals(4, UserProfileParser.determineInitialOnboardingStep(incompleteFlagProfile))
     }
 
     @Test
-    fun testScenario4_ProfileCompleted() {
-        val completeProfile = UserProfile(
-            userId = "test_user_uid_123",
-            memberId = "BD979241",
-            displayName = "Rohit Sharma",
-            gender = "Man",
-            age = 25,
-            state = "Maharashtra",
-            city = "Mumbai",
-            profileCompleted = true,
-            profilePhotoUrls = listOf("url1", "url2", "url3", "url4", "url5"),
-            rulesAccepted = true
-        )
-        val resultState = evaluateProfileState(
-            isConnected = true,
-            documentExists = true,
-            profile = completeProfile
-        )
-        assertTrue(
-            "Fully completed profile with 5 photos must transition to AuthenticatedProfileCompleted",
-            resultState is AppAuthState.AuthenticatedProfileCompleted
-        )
-        val completed = resultState as AppAuthState.AuthenticatedProfileCompleted
-        assertEquals("BD979241", completed.profile.memberId)
-        assertEquals(5, completed.profile.profilePhotoUrls.size)
-        assertTrue(completed.profile.profileCompleted)
-        assertEquals("test_user_uid_123", completed.userId)
-    }
+    fun testScenario4_NewUserAuthenticationAndMissingDocumentStartsOnboarding() {
+        val initial = AppAuthState.Initializing
+        assertTrue(initial is AppAuthState.Initializing)
 
-    @Test
-    fun testScenario5_FirestoreRequestTimeoutHandling() {
         val resultState = evaluateProfileState(
             isConnected = true,
             documentExists = false,
-            profile = null,
-            hasTimedOut = true
+            profile = null
         )
         assertTrue(
-            "10s timeout must transition to RequestFailed with canRetry = true",
-            resultState is AppAuthState.RequestFailed
+            "Genuinely missing document must result in AuthenticatedProfileNotCreated",
+            resultState is AppAuthState.AuthenticatedProfileNotCreated
         )
-        val failed = resultState as AppAuthState.RequestFailed
-        assertTrue(failed.canRetry)
-        assertTrue(failed.message.contains("timed out", ignoreCase = true))
+        assertEquals(1, UserProfileParser.determineInitialOnboardingStep(null))
     }
 
     @Test
-    fun testScenario6_InternetDisconnectDuringLoading() {
-        val resultState = evaluateProfileState(
+    fun testScenario5_NetworkErrorDoesNotCreateDuplicateOrTriggerOnboarding() {
+        val offlineState = evaluateProfileState(
             isConnected = false,
             documentExists = false,
             profile = null
         )
         assertTrue(
-            "Offline condition must emit NetworkUnavailable",
-            resultState is AppAuthState.NetworkUnavailable
+            "Offline state must show NetworkUnavailable, never AuthenticatedProfileNotCreated",
+            offlineState is AppAuthState.NetworkUnavailable
         )
     }
 
     @Test
-    fun testScenario7_PermissionDeniedHandling() {
-        val resultState = evaluateProfileState(
+    fun testScenario6_FirestoreTimeoutShowsRetryableErrorWithoutLosingAccount() {
+        val timeoutState = evaluateProfileState(
+            isConnected = true,
+            documentExists = false,
+            profile = null,
+            hasTimedOut = true
+        )
+        assertTrue(timeoutState is AppAuthState.RequestFailed)
+        val failed = timeoutState as AppAuthState.RequestFailed
+        assertTrue(failed.canRetry)
+        assertTrue(failed.message.contains("timed out", ignoreCase = true))
+    }
+
+    @Test
+    fun testScenario7_PermissionDeniedShowsErrorAndDoesNotTreatAsMissingProfile() {
+        val errorState = evaluateProfileState(
             isConnected = true,
             documentExists = true,
             profile = null,
             firestoreError = "PERMISSION_DENIED: Missing or insufficient permissions."
         )
-        assertTrue(
-            "Permission denied error must transition to RequestFailed",
-            resultState is AppAuthState.RequestFailed
-        )
-        val failed = resultState as AppAuthState.RequestFailed
+        assertTrue(errorState is AppAuthState.RequestFailed)
+        val failed = errorState as AppAuthState.RequestFailed
         assertTrue(failed.message.contains("PERMISSION_DENIED"))
         assertTrue(failed.canRetry)
     }
 
     @Test
-    fun testScenario8_AppTeardownAndResumeDuringOnboarding() {
-        val stepProgressState = AppAuthState.ProfileSetupInProgress(
-            userId = "test_user_uid_123",
-            step = 3
-        )
-        assertEquals(3, stepProgressState.step)
-        assertEquals("test_user_uid_123", stepProgressState.userId)
+    fun testScenario8_DobExtractionDerivesBirthYearFromAgeWhenDobMissing() {
+        val profileWithAgeOnly = UserProfile(age = 27, dob = "")
+        val (_, _, year) = UserProfileParser.extractDobParts(profileWithAgeOnly, currentYear = 2026)
+        assertEquals("1999", year)
     }
 
     @Test
-    fun testScenario9_RepeatedAuthListenerCallbacks_Idempotence() {
+    fun testScenario9_RepeatedAuthListenerCallbacksDoNotDowngradeCompletedUser() {
         val completeProfile = UserProfile(
             userId = "test_user_uid_123",
             memberId = "BD979241",
             displayName = "Rohit",
             profileCompleted = true,
-            profilePhotoUrls = listOf("1", "2", "3", "4", "5")
+            profilePhotoUrls = listOf("1", "2", "3", "4", "5"),
+            createdAt = Timestamp.now()
         )
-
-        // First callback
-        val state1 = evaluateProfileState(true, true, completeProfile)
+        val state1 = evaluateProfileState(isConnected = true, documentExists = true, profile = completeProfile)
+        val state2 = evaluateProfileState(isConnected = true, documentExists = true, profile = completeProfile)
         assertTrue(state1 is AppAuthState.AuthenticatedProfileCompleted)
-
-        // Subsequent identical callback (e.g. metadata flutter or network reconnect)
-        val state2 = evaluateProfileState(true, true, completeProfile)
         assertTrue(state2 is AppAuthState.AuthenticatedProfileCompleted)
+        assertEquals(
+            (state1 as AppAuthState.AuthenticatedProfileCompleted).profile.effectiveMemberId,
+            (state2 as AppAuthState.AuthenticatedProfileCompleted).profile.effectiveMemberId
+        )
+    }
 
-        assertEquals(
-            (state1 as AppAuthState.AuthenticatedProfileCompleted).profile.userId,
-            (state2 as AppAuthState.AuthenticatedProfileCompleted).profile.userId
+    @Test
+    fun testScenario10_NoBackfillNeededForModernCompleteDocument() {
+        val modernMap: Map<String, Any?> = mapOf(
+            "userId" to "uid_modern",
+            "memberId" to "BD979241",
+            "profilePhotoUrls" to listOf("https://1", "https://2", "https://3", "https://4", "https://5"),
+            "profileCompleted" to true
         )
-        assertEquals(
-            (state1 as AppAuthState.AuthenticatedProfileCompleted).userId,
-            (state2 as AppAuthState.AuthenticatedProfileCompleted).userId
-        )
+        val parsed = UserProfileParser.fromMap("uid_modern", modernMap)
+        assertNull(UserProfileParser.needsNonDestructiveBackfill(modernMap, parsed))
     }
 }

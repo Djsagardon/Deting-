@@ -57,6 +57,7 @@ private fun findActivity(context: Context): Activity? {
 
 @Composable
 fun AuthScreen(
+    externalErrorMessage: String? = null,
     onAuthSuccess: (FirebaseUser) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -66,7 +67,7 @@ fun AuthScreen(
     var isAgeConfirmed by remember { mutableStateOf(false) }
     var isTermsAccepted by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember(externalErrorMessage) { mutableStateOf(externalErrorMessage) }
 
     Box(
         modifier = Modifier
@@ -212,6 +213,7 @@ fun AuthScreen(
             PrimaryButton(
                 text = "Continue with Google",
                 onClick = {
+                    if (isLoading) return@PrimaryButton
                     if (!NetworkConnectivityManager.isConnected()) {
                         errorMessage = "No internet connection. Please connect to the internet and try again."
                         return@PrimaryButton

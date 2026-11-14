@@ -10,59 +10,104 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.role == 'admin' ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
-      );
-    }
-
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() && (
+        ('role' in request.auth.token && request.auth.token.role == 'admin') ||
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        ('email' in request.auth.token && request.auth.token.email in ['ckdbengalhoney@gmail.com'])
+      );
+    }
+
     // =========================================================================
-    // 1. Users Collection & Subcollections
+    // 1. Users Collection & Notifications Subcollection
     // =========================================================================
 
     match /users/{userId} {
-      // Authenticated users can read profile documents for discovery and matching
+      // Authenticated users can read profile documents for discovery, member ID search and matching
       allow read: if isAuthenticated();
 
       // Users can only create their own profile document
-      allow create: if isOwner(userId);
+      // Cannot self-assign admin role or suspended/banned status on creation
+      allow create: if isOwner(userId) &&
+        request.resource.data.userId == userId &&
+        (!('role' in request.resource.data) || request.resource.data.role != 'admin' || isAdmin()) &&
+        (!('accountStatus' in request.resource.data) || request.resource.data.accountStatus == 'active' || isAdmin());
 
-      // Users can update their own profile, but cannot escalate their role to admin
+      // Profile owner can update permitted profile fields; cannot mutate userId or escalate role
+      // Supports legacy documents where userId may not have been stored in the body originally
       allow update: if (
-        isOwner(userId) && (
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||
-          isAdmin()
-        )
+        isOwner(userId) &&
+        resource != null &&
+        (
+          ('userId' in resource.data && request.resource.data.userId == resource.data.userId) ||
+          (!('userId' in resource.data) && (!('userId' in request.resource.data) || request.resource.data.userId == userId))
+        ) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'accountStatus']) || isAdmin()) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['memberId', 'publicUserId']) ||
+         isAdmin() ||
+         !('memberId' in resource.data) ||
+         resource.data.memberId == '' ||
+         resource.data.memberId == null) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['publicUserId']) ||
+         isAdmin() ||
+         !('publicUserId' in resource.data) ||
+         resource.data.publicUserId == '' ||
+         resource.data.publicUserId == null ||
+         request.resource.data.publicUserId == resource.data.publicUserId)
       ) || isAdmin();
 
       // Only the profile owner or an authorized admin can delete a user account
       allow delete: if isOwner(userId) || isAdmin();
 
-      // Notifications Subcollection
+      // User In-App Notifications Subcollection
       match /notifications/{notificationId} {
-        allow read, update: if isOwner(userId);
-        allow create: if isAuthenticated();
+        // Only recipient owner or admin can read notifications
+        allow read: if isOwner(userId) || isAdmin();
+
+        // Normal users can only create peer notifications (chat, match, call).
+        // Admin announcements ("admin_announcement") require verified Admin privileges!
+        allow create: if isAuthenticated() &&
+          request.resource.data.userId == userId &&
+          (
+            (request.resource.data.type == 'admin_announcement' && isAdmin()) ||
+            (request.resource.data.type in ['match_request', 'match_accepted', 'chat', 'call', 'system', 'safety'])
+          );
+
+        // Recipient can update read/delivered status; cannot mutate content or type
+        allow update: if (
+          isOwner(userId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'read', 'delivered', 'deliveryStatus', 'readAt', 'deliveredAt'
+          ])
+        ) || isAdmin();
+
+        // Only recipient owner or admin can delete notifications
         allow delete: if isOwner(userId) || isAdmin();
       }
     }
 
     // =========================================================================
-    // 2. Public User Search Index
+    // 2. Public User Search Index (Member ID Lookups without Private Fields)
     // =========================================================================
 
     match /public_user_index/{publicId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        request.auth.uid == request.resource.data.userId ||
+        isAdmin()
+      );
+      allow update, delete: if isAuthenticated() && (
+        (resource != null && request.auth.uid == resource.data.userId) ||
+        isAdmin()
+      );
     }
 
     // =========================================================================
-    // 3. Rejections Collection (48-Hour Discovery Hide Rules)
+    // 3. Rejections Collection (48-Hour Discovery Hide Records)
     // =========================================================================
 
     match /rejections/{rejectionId} {
@@ -76,7 +121,7 @@ service cloud.firestore {
         isAdmin()
       );
       allow delete: if isAuthenticated() && (
-        resource != null && request.auth.uid == resource.data.rejectorUid ||
+        (resource != null && request.auth.uid == resource.data.rejectorUid) ||
         isAdmin()
       );
     }
@@ -110,14 +155,19 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 5. Likes Collection
+    // 5. Likes Collection (Discovery Interests)
     // =========================================================================
 
     match /likes/{likeId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (
-        request.auth.uid == request.resource.data.fromUserId ||
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        request.auth.uid == resource.data.fromUserId ||
+        request.auth.uid == resource.data.toUserId ||
         isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        request.auth.uid == request.resource.data.fromUserId &&
+        request.resource.data.toUserId != request.auth.uid
       );
       allow update, delete: if isAuthenticated() && (
         (resource != null && request.auth.uid == resource.data.fromUserId) ||
@@ -126,10 +176,11 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 6. Confirmed Matches & Chat Messages
+    // 6. Confirmed Matches & Real-Time Chat Messages
     // =========================================================================
 
     match /matches/{matchId} {
+      // Only matched participants or admin can read match documents
       allow read: if isAuthenticated() && (
         resource == null ||
         request.auth.uid in resource.data.users ||
@@ -137,31 +188,57 @@ service cloud.firestore {
         request.auth.uid == resource.data.user2Id ||
         isAdmin()
       );
+
+      // Authenticated participant or admin can create match record
       allow create: if isAuthenticated() && (
-        request.auth.uid == request.resource.data.user1Id ||
-        request.auth.uid == request.resource.data.user2Id ||
-        request.auth.uid in request.resource.data.users ||
+        (
+          request.auth.uid in request.resource.data.users &&
+          (request.auth.uid == request.resource.data.user1Id || request.auth.uid == request.resource.data.user2Id)
+        ) ||
         isAdmin()
       );
+
+      // Only matched participants or admin can update match metadata (last message, timestamps)
       allow update: if isAuthenticated() && (
         request.auth.uid in resource.data.users ||
         request.auth.uid == resource.data.user1Id ||
         request.auth.uid == resource.data.user2Id ||
         isAdmin()
       );
+
       allow delete: if isAdmin();
 
       // Real-time Chat Messages Subcollection
       match /messages/{messageId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated() && request.auth.uid == request.resource.data.senderId;
-        allow update: if isAuthenticated();
-        allow delete: if isAdmin() || (resource != null && request.auth.uid == resource.data.senderId);
+        function isMatchParticipant() {
+          return exists(/databases/$(database)/documents/matches/$(matchId)) &&
+            request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.users;
+        }
+
+        // Only confirmed match participants or admin can read messages
+        allow read: if isAuthenticated() && (isMatchParticipant() || isAdmin());
+
+        // Only verified match participant can post messages; cannot impersonate another sender
+        allow create: if isAuthenticated() &&
+          request.auth.uid == request.resource.data.senderId &&
+          (isMatchParticipant() || isAdmin());
+
+        // Match participants can update delivery/seen status or soft-delete
+        allow update: if isAuthenticated() &&
+          resource != null &&
+          (isMatchParticipant() || isAdmin());
+
+        // Sender or admin can delete message
+        allow delete: if isAdmin() || (
+          isAuthenticated() &&
+          resource != null &&
+          request.auth.uid == resource.data.senderId
+        );
       }
     }
 
     // =========================================================================
-    // 7. WebRTC Calling & P2P Signaling
+    // 7. WebRTC Audio/Video Calling & P2P Signaling
     // =========================================================================
 
     match /calls/{callId} {
@@ -179,15 +256,7 @@ service cloud.firestore {
         );
       }
 
-      function isValidCallCreate() {
-        return isAuthenticated() &&
-          request.resource.data.callerUid == request.auth.uid &&
-          request.resource.data.receiverUid is string &&
-          request.resource.data.receiverUid != request.auth.uid &&
-          request.resource.data.receiverUid.size() > 0;
-      }
-
-      // Read: Only the caller, the receiver, or an authorized admin
+      // Read: Only caller, receiver, or authorized admin
       allow read: if isAuthenticated() && (
         resource == null ||
         request.auth.uid == resource.data.callerUid ||
@@ -195,36 +264,33 @@ service cloud.firestore {
         isAdmin()
       );
 
-      // Create: Authenticated caller initiating a call to a valid distinct receiver
-      allow create: if isValidCallCreate();
+      // Create: Authenticated caller initiating a call to a distinct receiver
+      allow create: if isAuthenticated() &&
+        request.resource.data.callerUid == request.auth.uid &&
+        request.resource.data.receiverUid is string &&
+        request.resource.data.receiverUid != request.auth.uid &&
+        request.resource.data.receiverUid.size() > 0;
 
-      // Update: Caller, receiver, or admin updating call status, offer, answer, or duration
-      // Prevent changing callerUid or receiverUid to hijack ongoing calls
+      // Update: Caller or receiver updating status, offer, answer; immutable callerUid and receiverUid
       allow update: if isAuthenticated() && (
-        isCallParticipant() &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['callerUid', 'receiverUid'])
-      ) || isAdmin();
+        (
+          isCallParticipant() &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['callerUid', 'receiverUid'])
+        ) ||
+        isAdmin()
+      );
 
       // Delete: Participant or admin
       allow delete: if isCallParticipant();
 
       // WebRTC Caller Candidates Subcollection
       match /callerCandidates/{candidateId} {
-        // Read: Caller, receiver, or admin
         allow read: if isAuthenticated() && (
           request.auth.uid == getCallData().callerUid ||
           request.auth.uid == getCallData().receiverUid ||
           isAdmin()
         );
-
-        // Create/Update: Only the caller or an admin
-        allow create, update: if isAuthenticated() && (
-          request.auth.uid == getCallData().callerUid ||
-          isAdmin()
-        );
-
-        // Delete: Caller or admin
-        allow delete: if isAuthenticated() && (
+        allow create, update, delete: if isAuthenticated() && (
           request.auth.uid == getCallData().callerUid ||
           isAdmin()
         );
@@ -232,21 +298,12 @@ service cloud.firestore {
 
       // WebRTC Receiver Candidates Subcollection
       match /receiverCandidates/{candidateId} {
-        // Read: Caller, receiver, or admin
         allow read: if isAuthenticated() && (
           request.auth.uid == getCallData().callerUid ||
           request.auth.uid == getCallData().receiverUid ||
           isAdmin()
         );
-
-        // Create/Update: Only the receiver or an admin
-        allow create, update: if isAuthenticated() && (
-          request.auth.uid == getCallData().receiverUid ||
-          isAdmin()
-        );
-
-        // Delete: Receiver or admin
-        allow delete: if isAuthenticated() && (
+        allow create, update, delete: if isAuthenticated() && (
           request.auth.uid == getCallData().receiverUid ||
           isAdmin()
         );
@@ -261,6 +318,7 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         resource == null ||
         request.auth.uid == resource.data.blockerUid ||
+        request.auth.uid == resource.data.blockedUid ||
         isAdmin()
       );
       allow create: if isAuthenticated() && (
@@ -274,7 +332,7 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 9. User Reports Collection
+    // 9. User Moderation Reports Collection
     // =========================================================================
 
     match /reports/{reportId} {
@@ -284,7 +342,7 @@ service cloud.firestore {
         isAdmin()
       );
 
-      // Only authorized admins can review, update, or dismiss reports
+      // Reports are strictly confidential: ONLY authorized admins can read, review, or dismiss
       allow read, update, delete: if isAdmin();
     }
 
@@ -303,7 +361,30 @@ service cloud.firestore {
     // =========================================================================
 
     match /admin_audit_logs/{logId} {
+      // Admin audit trail is confidential and immutable by normal users
       allow read, write: if isAdmin();
+    }
+
+    // =========================================================================
+    // 12. Admin Broadcast Notifications Collection
+    // =========================================================================
+
+    match /broadcasts/{broadcastId} {
+      // Authenticated users can read broadcasts intended for all users or targeted to them
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        resource.data.targetAudience == 'all' ||
+        (resource.data.targetUserIds is list && request.auth.uid in resource.data.targetUserIds) ||
+        isAdmin()
+      );
+
+      // Only trusted administrators can create, publish, modify or delete broadcasts
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /admin_broadcasts/{broadcastId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
     }
   }
 }

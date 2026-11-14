@@ -58,33 +58,48 @@ object NetworkConnectivityManager {
 
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                Log.d(TAG, "Network became available. Probing live internet...")
+                val cmRef = connectivityManager
+                val immediateOnline = if (cmRef != null) evaluateActiveNetwork(cmRef) else true
+                if (immediateOnline) {
+                    _isOnline.value = true
+                }
+                Log.d(TAG, "Network became available (immediateOnline=$immediateOnline). Probing live internet...")
                 scope.launch {
                     val hasLiveInternet = probeLiveInternet()
-                    _isOnline.value = hasLiveInternet
-                    Log.d(TAG, "Live internet probe result onAvailable: $hasLiveInternet")
+                    val latestCm = connectivityManager
+                    val validatedBySystem = latestCm?.activeNetwork?.let { net ->
+                        latestCm.getNetworkCapabilities(net)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                    } ?: false
+                    _isOnline.value = hasLiveInternet || validatedBySystem
+                    Log.d(TAG, "Live internet probe result onAvailable: probe=$hasLiveInternet validated=$validatedBySystem")
                 }
             }
 
             override fun onLost(network: Network) {
-                Log.w(TAG, "Network connection lost.")
-                _isOnline.value = false
+                val cmRef = connectivityManager
+                val stillHasActive = cmRef != null && evaluateActiveNetwork(cmRef)
+                Log.w(TAG, "Network connection lost (stillHasActive=$stillHasActive).")
+                _isOnline.value = stillHasActive
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
                 val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 val isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                val isOnlineNow = hasInternet && isValidated
                 Log.d(TAG, "Capabilities changed: hasInternet=$hasInternet, isValidated=$isValidated")
 
-                if (isOnlineNow != _isOnline.value) {
-                    if (hasInternet && !isValidated) {
-                        // Might be waiting for validation or captive portal, do active probe
-                        scope.launch {
-                            _isOnline.value = probeLiveInternet()
-                        }
-                    } else {
-                        _isOnline.value = isOnlineNow
+                if (hasInternet && isValidated) {
+                    _isOnline.value = true
+                } else if (!hasInternet) {
+                    _isOnline.value = false
+                } else {
+                    // Has INTERNET capability, waiting for system validation
+                    scope.launch {
+                        val live = probeLiveInternet()
+                        val latestCm = connectivityManager
+                        val nowValidated = latestCm?.activeNetwork?.let { net ->
+                            latestCm.getNetworkCapabilities(net)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                        } ?: false
+                        _isOnline.value = live || nowValidated
                     }
                 }
             }
@@ -133,7 +148,10 @@ object NetworkConnectivityManager {
         if (forceProbe) {
             scope.launch {
                 val live = probeLiveInternet()
-                _isOnline.value = live
+                val nowValidated = cm.activeNetwork?.let { net ->
+                    cm.getNetworkCapabilities(net)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                } ?: false
+                _isOnline.value = live || nowValidated
             }
         } else {
             _isOnline.value = true
@@ -143,12 +161,13 @@ object NetworkConnectivityManager {
 
     /**
      * Actively tests if HTTP packets reach external servers within 2.5 seconds.
-     * Prevents captive portal or disconnected router from tricking the app into thinking it is online.
+     * Includes Google 204 and Firestore endpoint checks so restricted networks still allow Firebase.
      */
     suspend fun probeLiveInternet(): Boolean = withContext(Dispatchers.IO) {
         val probeUrls = listOf(
             "https://clients3.google.com/generate_204",
-            "https://www.google.com/generate_204"
+            "https://www.google.com/generate_204",
+            "https://firestore.googleapis.com"
         )
         for (urlString in probeUrls) {
             var connection: HttpURLConnection? = null
@@ -162,7 +181,7 @@ object NetworkConnectivityManager {
                 connection.connect()
 
                 val code = connection.responseCode
-                if (code == 204 || code == 200) {
+                if (code in 200..499) {
                     return@withContext true
                 }
             } catch (_: Exception) {

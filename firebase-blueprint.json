@@ -1,0 +1,236 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account profile on Bondly",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "memberId": { "type": "string", "description": "Unique Member ID" },
+        "publicUserId": { "type": "string", "description": "Public identifier" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "dob": { "type": "string", "description": "Date of birth string" },
+        "age": { "type": "integer", "description": "User age in years (min 18)" },
+        "bio": { "type": "string", "description": "About me biography" },
+        "gender": { "type": "string", "description": "User gender" },
+        "interests": { "type": "array", "description": "List of hobbies or interests" },
+        "city": { "type": "string", "description": "City of residence" },
+        "state": { "type": "string", "description": "Indian state or union territory" },
+        "maskedMobileNumber": { "type": "string", "description": "10-digit mobile number" },
+        "isMobileVerified": { "type": "boolean", "description": "True if confirmed" },
+        "mobileConfirmationStatus": { "type": "string", "enum": ["unconfirmed", "in_app_confirmed", "verified"] },
+        "profilePhotoUrls": { "type": "array", "description": "Photo URLs" },
+        "totalPhotoCount": { "type": "integer", "description": "Total photo count" },
+        "datingPreference": { "type": "string", "description": "Dating preference" },
+        "rulesAccepted": { "type": "boolean", "description": "Community rules accepted" },
+        "profileCompleted": { "type": "boolean", "description": "Onboarding completion status" },
+        "verificationStatus": { "type": "string", "description": "Account verification status" },
+        "accountStatus": { "type": "string", "enum": ["active", "suspended", "banned"] },
+        "allowCallsFrom": { "type": "string", "enum": ["matches", "everyone", "nobody"] },
+        "showOnlineStatus": { "type": "boolean", "description": "Show online indicator" },
+        "isOnline": { "type": "boolean", "description": "Current presence status" },
+        "isPremium": { "type": "boolean", "description": "Premium tier membership" },
+        "userLevel": { "type": "integer", "description": "Engagement level" },
+        "activeDaysCount": { "type": "integer", "description": "Active days counter" },
+        "lastActiveDate": { "type": "string", "description": "Date string of last activity" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "fcmTokens": { "type": "array", "description": "FCM device tokens for push notifications" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastActiveAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "User inbox notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "targetId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderPhotoUrl": { "type": "string" },
+        "read": { "type": "boolean" },
+        "delivered": { "type": "boolean" },
+        "deliveryStatus": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "deliveredAt": { "type": "string", "format": "date-time" },
+        "readAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "type"]
+    },
+    "PublicUserIndex": {
+      "title": "PublicUserIndex",
+      "description": "Public search index for Member ID lookups without sensitive fields",
+      "type": "object",
+      "properties": {
+        "memberId": { "type": "string" },
+        "publicUserId": { "type": "string" },
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "bio": { "type": "string" },
+        "interests": { "type": "array" },
+        "gender": { "type": "string" },
+        "age": { "type": "integer" },
+        "photoUrl": { "type": "string" },
+        "isOnline": { "type": "boolean" },
+        "lastActiveAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "Confirmed match between two users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "user1Id": { "type": "string" },
+        "user2Id": { "type": "string" },
+        "user1Name": { "type": "string" },
+        "user2Name": { "type": "string" },
+        "user1Photo": { "type": "string" },
+        "user2Photo": { "type": "string" },
+        "users": { "type": "array" },
+        "lastMessage": { "type": "string" },
+        "lastMessageSenderId": { "type": "string" },
+        "lastMessageTimestamp": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user1Id", "user2Id", "users"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Real-time message in a match",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "matchId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "status": { "type": "string" },
+        "deletedForEveryone": { "type": "boolean" },
+        "deletedFor": { "type": "array" },
+        "localTimestamp": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "deliveredAt": { "type": "string", "format": "date-time" },
+        "seenAt": { "type": "string", "format": "date-time" },
+        "deletedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["matchId", "senderId"]
+    },
+    "CallSession": {
+      "title": "CallSession",
+      "description": "Audio or video WebRTC signaling call session",
+      "type": "object",
+      "properties": {
+        "callId": { "type": "string" },
+        "callerUid": { "type": "string" },
+        "receiverUid": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerPhotoUrl": { "type": "string" },
+        "receiverName": { "type": "string" },
+        "receiverPhotoUrl": { "type": "string" },
+        "channelName": { "type": "string" },
+        "callType": { "type": "string", "enum": ["voice", "video"] },
+        "status": { "type": "string", "enum": ["ringing", "accepted", "rejected", "ended", "busy", "timeout", "failed"] },
+        "offer": { "type": "object" },
+        "answer": { "type": "object" },
+        "durationSeconds": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["callerUid", "receiverUid", "callType", "status"]
+    },
+    "AdminBroadcast": {
+      "title": "AdminBroadcast",
+      "description": "System or admin broadcast notification announcement",
+      "type": "object",
+      "properties": {
+        "broadcastId": { "type": "string" },
+        "adminUid": { "type": "string" },
+        "adminName": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "targetAudience": { "type": "string", "enum": ["all", "selected", "single"] },
+        "targetUserIds": { "type": "array" },
+        "status": { "type": "string", "enum": ["published", "archived", "draft"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adminUid", "title", "message", "targetAudience"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles collection"
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": "NotificationItem",
+      "description": "User notifications inbox"
+    },
+    "/public_user_index/{publicId}": {
+      "schema": "PublicUserIndex",
+      "description": "Public Member ID lookup index"
+    },
+    "/rejections/{rejectionId}": {
+      "schema": { "$ref": "#/entities/Rejection" },
+      "description": "Discovery 48-hour pass records"
+    },
+    "/match_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/MatchRequest" },
+      "description": "Interest / match requests"
+    },
+    "/likes/{likeId}": {
+      "schema": { "$ref": "#/entities/Like" },
+      "description": "Likes and discovery interest records"
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Active matches collection"
+    },
+    "/matches/{matchId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Match chat messages subcollection"
+    },
+    "/calls/{callId}": {
+      "schema": "CallSession",
+      "description": "WebRTC P2P signaling session"
+    },
+    "/calls/{callId}/callerCandidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/IceCandidateModel" },
+      "description": "WebRTC caller ICE candidates"
+    },
+    "/calls/{callId}/receiverCandidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/IceCandidateModel" },
+      "description": "WebRTC receiver ICE candidates"
+    },
+    "/blocks/{blockId}": {
+      "schema": { "$ref": "#/entities/Block" },
+      "description": "User block records"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Account and content moderation reports"
+    },
+    "/user_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/UserSession" },
+      "description": "Active session analytics"
+    },
+    "/admin_audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminAuditLog" },
+      "description": "Admin actions audit log"
+    },
+    "/broadcasts/{broadcastId}": {
+      "schema": "AdminBroadcast",
+      "description": "Admin broadcast announcements"
+    }
+  }
+}

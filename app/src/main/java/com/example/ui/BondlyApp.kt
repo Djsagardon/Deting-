@@ -91,8 +91,9 @@ fun BondlyApp(
 
         is AppAuthState.Unauthenticated, is AppAuthState.AuthFailed -> {
             AuthScreen(
+                externalErrorMessage = (state as? AppAuthState.AuthFailed)?.message,
                 onAuthSuccess = { authedUser ->
-                    authViewModel.resolveUserProfile(authedUser)
+                    authViewModel.resolveUserProfile(authedUser, forceRefresh = false)
                 }
             )
         }
@@ -125,49 +126,57 @@ fun BondlyApp(
         }
 
         is AppAuthState.AuthenticatedProfileNotCreated -> {
-            OnboardingProfileScreen(
-                currentUserId = state.userId,
-                repository = repository,
-                initialProfile = null,
-                onProfileCreated = { completedProfile ->
-                    authViewModel.onProfileCreationSuccess(completedProfile)
-                }
-            )
+            key(state.userId) {
+                OnboardingProfileScreen(
+                    currentUserId = state.userId,
+                    repository = repository,
+                    initialProfile = null,
+                    onProfileCreated = { completedProfile ->
+                        authViewModel.onProfileCreationSuccess(completedProfile)
+                    }
+                )
+            }
         }
 
         is AppAuthState.AuthenticatedProfileIncomplete -> {
-            OnboardingProfileScreen(
-                currentUserId = state.userId,
-                repository = repository,
-                initialProfile = state.profile,
-                onProfileCreated = { completedProfile ->
-                    authViewModel.onProfileCreationSuccess(completedProfile)
-                }
-            )
+            key(state.userId) {
+                OnboardingProfileScreen(
+                    currentUserId = state.userId,
+                    repository = repository,
+                    initialProfile = state.profile,
+                    onProfileCreated = { completedProfile ->
+                        authViewModel.onProfileCreationSuccess(completedProfile)
+                    }
+                )
+            }
         }
 
         is AppAuthState.ProfileSetupInProgress -> {
-            OnboardingProfileScreen(
-                currentUserId = state.userId,
-                repository = repository,
-                initialProfile = null,
-                onProfileCreated = { completedProfile ->
-                    authViewModel.onProfileCreationSuccess(completedProfile)
-                }
-            )
+            key(state.userId) {
+                OnboardingProfileScreen(
+                    currentUserId = state.userId,
+                    repository = repository,
+                    initialProfile = null,
+                    onProfileCreated = { completedProfile ->
+                        authViewModel.onProfileCreationSuccess(completedProfile)
+                    }
+                )
+            }
         }
 
         is AppAuthState.AuthenticatedProfileCompleted -> {
-            AuthenticatedAppContent(
-                currentUserId = state.userId,
-                initialProfile = state.profile,
-                repository = repository,
-                incomingNotification = incomingNotification,
-                onConsumeNotification = onConsumeNotification,
-                onSignOut = {
-                    authViewModel.signOut()
-                }
-            )
+            key(state.userId) {
+                AuthenticatedAppContent(
+                    currentUserId = state.userId,
+                    initialProfile = state.profile,
+                    repository = repository,
+                    incomingNotification = incomingNotification,
+                    onConsumeNotification = onConsumeNotification,
+                    onSignOut = {
+                        authViewModel.signOut(context)
+                    }
+                )
+            }
         }
 
     }

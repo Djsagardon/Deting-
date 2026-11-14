@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -64,40 +65,62 @@ fun OnboardingProfileScreen(
     var currentImgbbKey by remember { mutableStateOf(ImageUploadConfig.getApiKey(context)) }
 
     // Upload manager preserved across configuration / step navigation
-    val uploadManager = remember {
-        ProfilePhotoUploadManager().apply {
+    val uploadManager = remember(currentUserId) {
+        ProfilePhotoUploadManager(
+            repository = repository,
+            imageRepo = com.example.data.repository.ImageUploadRepository(context)
+        ).apply {
             if (!initialProfile?.profilePhotoUrls.isNullOrEmpty()) {
-                initializeFromExisting(initialProfile.profilePhotoUrls)
+                initializeFromExisting(initialProfile!!.profilePhotoUrls)
             }
+        }
+    }
+
+    // If real-time listener delivers initial photo URLs slightly later, populate empty slots without overwriting edits
+    LaunchedEffect(initialProfile?.profilePhotoUrls) {
+        val urls = initialProfile?.profilePhotoUrls.orEmpty()
+        if (urls.isNotEmpty()) {
+            uploadManager.initializeFromExisting(urls)
         }
     }
 
     val photoSlots by uploadManager.slots.collectAsState()
     val isSequentialUploading by uploadManager.isSequentialUploading.collectAsState()
 
-    var currentStep by remember { mutableIntStateOf(1) } // 1: Personal Info & Hobbies, 2: Mobile, 3: Photos (5 Slots), 4: Rules & Finish
+    var currentStep by remember(currentUserId) {
+        mutableIntStateOf(com.example.data.model.UserProfileParser.determineInitialOnboardingStep(initialProfile))
+    } // 1: Personal Info & Hobbies, 2: Mobile, 3: Photos (5 Slots), 4: Rules & Finish
+
+    val (initialDay, initialMonth, initialYear) = remember(currentUserId) {
+        com.example.data.model.UserProfileParser.extractDobParts(initialProfile)
+    }
 
     // Step 1: Personal Info & Hobbies
-    var fullName by remember { mutableStateOf(initialProfile?.displayName ?: "") }
-    var birthDay by remember { mutableStateOf("15") }
-    var birthMonth by remember { mutableStateOf("08") }
-    var birthYear by remember { mutableStateOf("2000") }
+    var fullName by remember(currentUserId) { mutableStateOf(initialProfile?.displayName ?: "") }
+    var birthDay by remember(currentUserId) { mutableStateOf(initialDay) }
+    var birthMonth by remember(currentUserId) { mutableStateOf(initialMonth) }
+    var birthYear by remember(currentUserId) { mutableStateOf(initialYear) }
     // REQUIREMENT: No gender option selected by default! Must be manually chosen.
-    var gender by remember { mutableStateOf(initialProfile?.gender ?: "") }
-    var selectedState by remember { mutableStateOf(initialProfile?.state?.takeIf { it.isNotBlank() } ?: "") }
-    var city by remember { mutableStateOf(initialProfile?.city ?: "") }
+    var gender by remember(currentUserId) { mutableStateOf(initialProfile?.gender ?: "") }
+    var selectedState by remember(currentUserId) { mutableStateOf(initialProfile?.state?.takeIf { it.isNotBlank() } ?: "") }
+    var city by remember(currentUserId) { mutableStateOf(initialProfile?.city ?: "") }
     var stateDropdownExpanded by remember { mutableStateOf(false) }
-    var bio by remember { mutableStateOf(initialProfile?.bio ?: "") }
-    var selectedHobbies by remember {
+    var bio by remember(currentUserId) { mutableStateOf(initialProfile?.bio ?: "") }
+    var selectedHobbies by remember(currentUserId) {
         mutableStateOf(initialProfile?.interests?.toSet() ?: emptySet())
     }
-    var datingPreference by remember { mutableStateOf(initialProfile?.datingPreference ?: "Everyone") }
+    var datingPreference by remember(currentUserId) {
+        mutableStateOf(initialProfile?.datingPreference?.takeIf { it.isNotBlank() } ?: "Everyone")
+    }
 
     // Step 2: In-App Mobile Confirmation State (No hardcoded OTPs!)
-    var mobileNumber by remember { mutableStateOf(initialProfile?.maskedMobileNumber ?: "") }
-    var isMobileConfirmed by remember {
+    var mobileNumber by remember(currentUserId) { mutableStateOf(initialProfile?.maskedMobileNumber ?: "") }
+    var isMobileConfirmed by remember(currentUserId) {
+        val existingValidMobile = initialProfile?.maskedMobileNumber?.trim()?.matches(Regex("^[6-9][0-9]{9}$")) == true
         mutableStateOf(
-            initialProfile?.mobileConfirmationStatus == "in_app_confirmed" || initialProfile?.isMobileVerified == true
+            initialProfile?.mobileConfirmationStatus == "in_app_confirmed" ||
+                initialProfile?.isMobileVerified == true ||
+                (existingValidMobile && initialProfile?.profileCompleted == true)
         )
     }
     var enteredOtpCode by remember { mutableStateOf("") }
@@ -153,9 +176,14 @@ fun OnboardingProfileScreen(
     }
 
     // Step 4: Rules & Saving
-    var hasAcceptedRules by remember { mutableStateOf(false) }
+    var hasAcceptedRules by remember(currentUserId) { mutableStateOf(initialProfile?.rulesAccepted ?: false) }
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    BackHandler(enabled = currentStep > 1 && !isSaving) {
+        errorMessage = null
+        currentStep--
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(CharcoalDark)) {
         Scaffold(
@@ -1183,22 +1211,26 @@ fun OnboardingProfileScreen(
                                         isSaving = true
                                         coroutineScope.launch {
                                             try {
-                                                val uniqueMemberId = repository.allocateUniqueMemberId(currentUserId)
+                                                val preservedMemberId = initialProfile?.effectiveMemberId?.takeIf { it.isNotBlank() }
+                                                    ?: repository.allocateUniqueMemberId(currentUserId)
                                                 val currentYear = Calendar.getInstance().get(Calendar.YEAR)
                                                 val ageInt = (currentYear - (birthYear.toIntOrNull() ?: 2000)).coerceAtLeast(18)
+                                                val formattedDob = "${birthDay.padStart(2, '0')}/${birthMonth.padStart(2, '0')}/$birthYear"
 
-                                                val profileToSave = (initialProfile ?: UserProfile()).copy(
+                                                val baseProfile = initialProfile ?: UserProfile()
+                                                val profileToSave = baseProfile.copy(
                                                     userId = currentUserId,
-                                                    memberId = uniqueMemberId,
-                                                    publicUserId = uniqueMemberId,
+                                                    memberId = preservedMemberId,
+                                                    publicUserId = preservedMemberId,
                                                     displayName = fullName.trim(),
+                                                    dob = baseProfile.dob.ifBlank { formattedDob },
                                                     age = ageInt,
                                                     gender = gender.trim(),
                                                     state = selectedState.trim(),
                                                     city = city.trim(),
                                                     maskedMobileNumber = mobileNumber.trim(),
-                                                    isMobileVerified = false,
-                                                    mobileConfirmationStatus = "in_app_confirmed",
+                                                    isMobileVerified = baseProfile.isMobileVerified,
+                                                    mobileConfirmationStatus = if (baseProfile.isMobileVerified) "verified" else "in_app_confirmed",
                                                     profilePhotoUrls = finalPhotoUrls,
                                                     totalPhotoCount = finalPhotoUrls.size,
                                                     bio = bio.trim(),
@@ -1206,7 +1238,7 @@ fun OnboardingProfileScreen(
                                                     datingPreference = datingPreference,
                                                     rulesAccepted = true,
                                                     profileCompleted = true,
-                                                    userLevel = 1
+                                                    userLevel = maxOf(baseProfile.userLevel, 1)
                                                 )
                                                 val saveResult = repository.saveProfile(profileToSave)
                                                 isSaving = false
